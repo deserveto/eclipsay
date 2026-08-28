@@ -1,0 +1,147 @@
+import type { DrawnCard, SpreadId } from './tarot/types';
+
+// ── Shared row shapes ─────────────────────────────────────────────────
+// Field names mirror `supabase/migrations/0001_init.sql` exactly so guest
+// localStorage records are a 1:1 insert on migration (plan: Data model).
+
+export type ReflectionGoal = 'feelings' | 'decisions' | 'relationships' | 'growth' | 'exploring';
+export type TarotFamiliarity = 'new' | 'some' | 'very';
+
+export type Profile = {
+  id: string;
+  display_name: string | null;
+  reflection_goal: ReflectionGoal | null;
+  tarot_familiarity: TarotFamiliarity | null;
+  memory_enabled: boolean;
+  created_at: string;
+};
+
+export type ReflectionSession = {
+  id: string;
+  user_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type JournalEntryType =
+  | 'freeform'
+  | 'reflection'
+  | 'tarot'
+  | 'insight'
+  | 'mood'
+  | 'followup'
+  | 'intention';
+
+export type AiNoteType = 'unpack' | 'prompts' | 'insight' | 'summary' | 'tarot';
+
+export type AiNote = {
+  id: string;
+  type: AiNoteType;
+  content: string;
+  createdAt: string;
+};
+
+export type Mood = 'Low' | 'Anxious' | 'Neutral' | 'Good' | 'Energized';
+
+export type JournalEntry = {
+  id: string;
+  user_id: string;
+  entry_type: JournalEntryType;
+  title: string | null;
+  body: string;
+  mood: string | null;
+  tags: string[];
+  ai_notes: AiNote[];
+  source_session_id: string | null;
+  source_reading_id: string | null;
+  parent_entry_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MemoryCategory =
+  | 'preference'
+  | 'goal'
+  | 'recurring_situation'
+  | 'context'
+  | 'project'
+  | 'relationship'
+  | 'reflection_preference';
+
+export type Memory = {
+  id: string;
+  user_id: string;
+  category: MemoryCategory;
+  content: string;
+  source: string;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FollowUpStatus = 'pending' | 'revisited' | 'dismissed';
+
+export type FollowUp = {
+  id: string;
+  user_id: string;
+  session_id: string | null;
+  journal_entry_id: string | null;
+  due_at: string;
+  status: FollowUpStatus;
+  created_at: string;
+};
+
+// ── Message meta (tool events persisted into messages.meta) ───────────
+
+export type SpreadOption = {
+  spreadId: SpreadId;
+  title: string;
+  positions: string[];
+};
+
+export type ConfirmCard =
+  | { kind: 'insight'; insightId: string; text: string; status: 'pending' | 'saved' | 'dismissed' }
+  | {
+      kind: 'memory';
+      memoryId: string;
+      content: string;
+      category: MemoryCategory;
+      status: 'pending' | 'saved' | 'dismissed';
+    }
+  | {
+      kind: 'followup';
+      followupId: string;
+      when: 'tomorrow' | '3days' | '1week' | 'custom';
+      dueAt: string;
+      status: 'pending' | 'saved' | 'dismissed';
+    };
+
+export type ContextChip = {
+  entryId: string;
+  title: string;
+};
+
+export type MessageMeta = {
+  readingId?: string;
+  spreadSuggestion?: { options: SpreadOption[] };
+  confirm?: ConfirmCard;
+  contextChips?: ContextChip[];
+  drawFailed?: boolean;
+  [key: string]: unknown;
+};
+
+export type ChatMessageRole = 'user' | 'assistant';
+
+export type StoredMessage = {
+  id: string;
+  session_id: string;
+  user_id: string;
+  role: ChatMessageRole;
+  content: string;
+  meta: MessageMeta;
+  created_at: string;
+};
+
+// Re-exports keep a single import surface for app code.
+export type { DrawnCard, SpreadId };

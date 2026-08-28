@@ -1,0 +1,121 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  /* Eclipsay warm palette (PRD §67): warm off-white, ink, one muted copper accent. */
+  --background: oklch(0.985 0.006 85);
+  --foreground: oklch(0.24 0.014 70);
+  --card: oklch(1 0.004 85);
+  --card-foreground: oklch(0.24 0.014 70);
+  --popover: oklch(1 0.004 85);
+  --popover-foreground: oklch(0.24 0.014 70);
+  --primary: oklch(0.54 0.085 55);
+  --primary-foreground: oklch(0.985 0.01 85);
+  --secondary: oklch(0.955 0.012 85);
+  --secondary-foreground: oklch(0.29 0.014 70);
+  --muted: oklch(0.95 0.01 85);
+  --muted-foreground: oklch(0.5 0.02 70);
+  --accent: oklch(0.94 0.02 80);
+  --accent-foreground: oklch(0.29 0.014 70);
+  --destructive: oklch(0.577 0.215 27.325);
+  --border: oklch(0.9 0.012 80);
+  --input: oklch(0.9 0.012 80);
+  --ring: oklch(0.68 0.07 60);
+  --chart-1: oklch(0.54 0.085 55);
+  --chart-2: oklch(0.62 0.06 130);
+  --chart-3: oklch(0.55 0.06 260);
+  --chart-4: oklch(0.68 0.09 80);
+  --chart-5: oklch(0.45 0.05 300);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.968 0.009 85);
+  --sidebar-foreground: oklch(0.24 0.014 70);
+  --sidebar-primary: oklch(0.54 0.085 55);
+  --sidebar-primary-foreground: oklch(0.985 0.01 85);
+  --sidebar-accent: oklch(0.94 0.018 80);
+  --sidebar-accent-foreground: oklch(0.29 0.014 70);
+  --sidebar-border: oklch(0.9 0.012 80);
+  --sidebar-ring: oklch(0.68 0.07 60);
+}
+
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/* Mystical treatment — scoped to tarot surfaces only (PRD §67).
+   Base UI stays calm; only tarot components opt into this atmosphere. */
+.mystical {
+  background:
+    radial-gradient(1100px 520px at 50% -8%, oklch(0.42 0.06 285 / 0.4), transparent 62%),
+    radial-gradient(900px 480px at 88% 112%, oklch(0.35 0.05 265 / 0.35), transparent 58%),
+    linear-gradient(175deg, oklch(0.26 0.035 275), oklch(0.2 0.03 268));
+  color: oklch(0.96 0.008 85);
+}
+
+.mystical-card-back {
+  background:
+    radial-gradient(circle at 30% 25%, oklch(0.5 0.07 285 / 0.5), transparent 55%),
+    radial-gradient(circle at 72% 78%, oklch(0.42 0.06 260 / 0.5), transparent 55%),
+    linear-gradient(160deg, oklch(0.3 0.045 275), oklch(0.22 0.035 268));
+}
+
+.mystical-ring {
+  box-shadow:
+    0 0 0 1px oklch(0.62 0.07 285 / 0.35),
+    0 0 24px oklch(0.5 0.08 285 / 0.25);
+}
