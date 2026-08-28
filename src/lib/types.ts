@@ -92,6 +92,16 @@ export type FollowUp = {
   created_at: string;
 };
 
+export type TarotReading = {
+  id: string;
+  session_id: string;
+  user_id: string;
+  spread_id: string;
+  seed: number;
+  cards: DrawnCard[];
+  created_at: string;
+};
+
 // ── Message meta (tool events persisted into messages.meta) ───────────
 
 export type SpreadOption = {

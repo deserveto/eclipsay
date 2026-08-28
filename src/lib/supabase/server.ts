@@ -2,6 +2,10 @@ import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 import type { User } from '@supabase/supabase-js';
 
+export function isSupabaseServerConfigured(): boolean {
+  return Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+}
+
 /** Route-handler/server-component client; exchanges cookies for the session user. */
 export async function createClient() {
   const cookieStore = await cookies();
