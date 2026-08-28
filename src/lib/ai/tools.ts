@@ -66,6 +66,67 @@ export function createTarotTools({ user, sessionId }: { user: User | null; sessi
         }
       },
     }),
+
+    propose_insight: tool({
+      description:
+        'Propose saving a short insight in the user\u2019s own words. Only use this when the user states a meaningful realization; preserve their wording exactly.',
+      inputSchema: z.object({
+        text: z.string().min(1).max(2000).describe('The insight, in the user\u2019s own words'),
+      }),
+      execute: async ({ text }) => {
+        const insightId = globalThis.crypto.randomUUID();
+        return { insightId, text };
+      },
+    }),
+
+    propose_memory: tool({
+      description:
+        'Propose remembering a fact for future sessions (preference, goal, recurring situation, context, project, relationship, reflection preference). Only when the user explicitly shares something they want remembered.',
+      inputSchema: z.object({
+        content: z.string().min(1).max(500),
+        category: z.enum([
+          'preference',
+          'goal',
+          'recurring_situation',
+          'context',
+          'project',
+          'relationship',
+          'reflection_preference',
+        ]),
+      }),
+      execute: async ({ content, category }) => {
+        const memoryId = globalThis.crypto.randomUUID();
+        return { memoryId, content, category };
+      },
+    }),
+
+    search_journal: tool({
+      description:
+        'Search the user\u2019s journal for past entries related to a query. Returns titles only, never bodies. The user must approve before an entry enters the conversation.',
+      inputSchema: z.object({
+        query: z.string().min(1).max(200),
+      }),
+      execute: async ({ query }) => {
+        if (!user) {
+          return { results: [] };
+        }
+        const { createClient } = await import('@/lib/supabase/server');
+        const supabase = await createClient();
+        const { data } = await supabase
+          .from('journal_entries')
+          .select('id, title, created_at')
+          .or(`title.ilike.%${query}%,body.ilike.%${query}%`)
+          .order('created_at', { ascending: false })
+          .limit(5);
+        return {
+          results: (data ?? []).map((row) => ({
+            entryId: row.id,
+            title: row.title ?? 'Untitled entry',
+            createdAt: row.created_at,
+          })),
+        };
+      },
+    }),
   };
 }
 

@@ -9,7 +9,7 @@ import {
 } from 'ai';
 import type { User } from '@supabase/supabase-js';
 import { getModel, isAiConfigured } from '@/lib/ai/provider';
-import { buildSystemPrompt } from '@/lib/ai/system-prompt';
+import { buildSystemPrompt, type MemoryForPrompt } from '@/lib/ai/system-prompt';
 import { classify } from '@/lib/ai/safety';
 import { createTarotTools } from '@/lib/ai/tools';
 import { createClient, getAuthUser, isSupabaseServerConfigured } from '@/lib/supabase/server';
@@ -58,6 +58,7 @@ export async function POST(request: Request) {
 
   let user: User | null = null;
   let profile: Profile | null = null;
+  let memories: MemoryForPrompt[] = [];
   if (isSupabaseServerConfigured()) {
     user = await getAuthUser();
   }
@@ -89,6 +90,18 @@ export async function POST(request: Request) {
     await supabase.from('profiles').upsert(seedProfile);
     }
 
+    // Approved memories feed the prompt only when memory_enabled (PRD §59).
+    if (profile?.memory_enabled) {
+      const { data: memoryRows } = await supabase
+        .from('memories')
+        .select('category, content')
+        .eq('user_id', user.id)
+        .eq('active', true)
+        .order('created_at', { ascending: false })
+        .limit(20);
+      memories = (memoryRows ?? []) as MemoryForPrompt[];
+    }
+
     const { data: existing } = await supabase
       .from('reflection_sessions')
       .select('id')
@@ -112,12 +125,27 @@ export async function POST(request: Request) {
     if (error) return Response.json({ error: 'persist_failed' }, { status: 500 });
   }
 
+  // Explicitly approved journal context (PRD §43, §44, §60): only entries the
+  // user brought in via the approval flow enter the prompt.
+  let approvedContext: { title: string; body: string }[] = [];
+  const approvedMeta = (lastUser?.metadata ?? {}) as { approvedContext?: { entryId: string }[] };
+  const approvedIds = (approvedMeta.approvedContext ?? []).map((c) => c.entryId).filter(Boolean);
+  if (user && approvedIds.length > 0 && isSupabaseServerConfigured()) {
+    const supabase = await createClient();
+    const { data } = await supabase
+      .from('journal_entries')
+      .select('title, body')
+      .in('id', approvedIds)
+      .eq('user_id', user.id);
+    approvedContext = (data ?? []) as { title: string; body: string }[];
+  }
+
   // High-stakes conversations get NO tarot tools at all (plan: Safety classifier).
   const tools = safety.highStakes ? undefined : createTarotTools({ user, sessionId: effectiveSessionId });
 
   const result = streamText({
     model: getModel(),
-    system: buildSystemPrompt({ profile, memories: [], safety }),
+    system: buildSystemPrompt({ profile, memories, safety, approvedContext }),
     messages: await convertToModelMessages(messages),
     stopWhen: isStepCount(5),
     tools,

@@ -14,6 +14,7 @@ export type SystemPromptArgs = {
   profile?: PromptProfile | null;
   memories?: MemoryForPrompt[];
   safety: SafetyClassification;
+  approvedContext?: { title: string; body: string }[];
 };
 
 const GOAL_FRAMING: Record<ReflectionGoal, string> = {
@@ -30,7 +31,7 @@ const FAMILIARITY: Record<TarotFamiliarity, string> = {
   very: 'Skip basic card definitions unless they ask; go deeper into synthesis across cards and positions.',
 };
 
-export function buildSystemPrompt({ profile, memories, safety }: SystemPromptArgs): string {
+export function buildSystemPrompt({ profile, memories, safety, approvedContext }: SystemPromptArgs): string {
   const sections: string[] = [];
 
   sections.push(`You are the companion inside Eclipsay, a private space for reflection. You help the person you are talking with understand their own thoughts, feelings, decisions, and patterns. You are warm, thoughtful, curious, calm, and non-judgmental. You are lightly mystical only when tarot is actually in play; otherwise you are grounded and contemporary.
@@ -70,6 +71,10 @@ ${memories.map((m) => `- [${m.category.replace(/_/g, ' ')}] ${m.content}`).join(
 
 Privacy: what they share here is theirs. You never push them to save, share, or remember anything.`);
 
+  if (approvedContext && approvedContext.length > 0) {
+    sections.push(`The user explicitly chose to bring these past journal entries into this conversation (treat as context they own; quote sparingly and only when it clearly helps):
+${approvedContext.map((e) => `--- ${e.title} ---\n${e.body}`).join('\n\n')}`);
+  }
   if (safety.highStakes) {
     sections.push(`This conversation touches a high-stakes topic (health, legal, financial, abuse, substances, self-harm, or similar). Rules for this reply and all later replies in this conversation:
 - Stay grounded and human. Reflect feelings and clarify what they are facing; do not stage-manage decisions.
@@ -84,3 +89,4 @@ Privacy: what they share here is theirs. You never push them to save, share, or 
 
   return sections.join('\n\n');
 }
+

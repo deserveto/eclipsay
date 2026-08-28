@@ -9,18 +9,21 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Markdown } from '@/components/chat/markdown';
 import { OnboardingDialogs } from '@/components/chat/onboarding-dialogs';
-import { ToolPartRenderer } from '@/components/chat/tool-parts';
+import { MigrationDialog } from '@/components/auth/migration-dialog';
+import { SignInDialog } from '@/components/auth/sign-in-dialog';
+import { toast } from 'sonner';
 import { TarotSpread, DrawFailedCard } from '@/components/tarot/tarot-spread';
 import { DrawCeremony } from '@/components/tarot/draw-ceremony';
-import { MigrationDialog } from '@/components/auth/migration-dialog';
+import { ToolPartRenderer, type SearchHit } from '@/components/chat/tool-parts';
 import { useDataMode } from '@/hooks/use-data-mode';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import { getSpread, SPREADS } from '@/lib/tarot/spreads';
 import { track } from '@/lib/analytics';
 import { joinUiText, storedToUi, type ChatMessage } from '@/lib/chat/convert';
-import { appendMessage, getGuestSession, saveReading, saveSession } from '@/lib/guest/store';
+import { appendMessage, getGuestSession, saveInsight as saveGuestInsight, saveMemory, saveReading, saveSession } from '@/lib/guest/store';
+import { makeEntry } from '@/lib/journal/entries';
 import type { DrawnCard } from '@/lib/tarot/types';
-import type { StoredMessage, TarotReading } from '@/lib/types';
+import type { MemoryCategory, StoredMessage, TarotReading } from '@/lib/types';
 
 function titleFrom(text: string): string {
   const compact = text.replace(/\s+/g, ' ').trim();
@@ -49,6 +52,9 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   const [declinedToolCalls, setDeclinedToolCalls] = useState<Set<string>>(new Set());
   const [ceremony, setCeremony] = useState<{ cards: DrawnCard[]; readingId: string; spreadId: string } | null>(null);
   const [drawFailedSpread, setDrawFailedSpread] = useState<string | null>(null);
+  const [signInOpen, setSignInOpen] = useState(false);
+  const [actedConfirms, setActedConfirms] = useState<Set<string>>(new Set());
+  const [approvedContext, setApprovedContext] = useState<SearchHit[]>([]);
 
   const chat = useChat<ChatMessage>({
     id: sessionId,
@@ -192,7 +198,11 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     if (trimmed.length === 0) return;
     // A previous failed generation leaves status 'error'; clear it so the
     // user can keep reflecting (their message must never be swallowed).
-    const attempt = () => chat.sendMessage({ text: trimmed, metadata });
+    const fullMetadata = {
+      ...metadata,
+      approvedContext: approvedContext.length > 0 ? approvedContext.map(({ entryId, title }) => ({ entryId, title })) : undefined,
+    };
+    const attempt = () => chat.sendMessage({ text: trimmed, metadata: fullMetadata });
     if (chat.status === 'error') {
       chat.clearError();
       setTimeout(attempt, 80);
@@ -312,6 +322,67 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     }
   };
 
+  // ── Propose-then-confirm actions (PRD §39, §41, §62) ─────────────────
+
+  const markActed = (toolCallId: string) => setActedConfirms((prev) => new Set(prev).add(toolCallId));
+
+  const saveInsightText = async (text: string) => {
+    const now = new Date().toISOString();
+    if (mode === 'account' && isSupabaseConfigured()) {
+      const res = await fetch('/api/insights', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, sessionId }),
+      });
+      if (!res.ok) {
+        toast.error('Could not save the insight. It stays on screen — try again.');
+        return;
+      }
+    } else {
+      // Guest: save locally, then offer the account as the value moment (§14).
+      saveGuestInsight(makeEntry({ body: text, entry_type: 'insight', source_session_id: sessionId, created_at: now, updated_at: now }));
+      setSignInOpen(true);
+    }
+    track('insight_saved');
+    toast.success('Insight saved to your journal.');
+  };
+
+  const rememberThis = async (content: string, category: string) => {
+    const now = new Date().toISOString();
+    if (mode === 'account' && isSupabaseConfigured()) {
+      const res = await fetch('/api/memories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, category, source: 'Reflection' }),
+      });
+      if (!res.ok) {
+        toast.error('Could not save the memory right now.');
+        return;
+      }
+    } else {
+      saveMemory({
+        id: crypto.randomUUID(),
+        user_id: '',
+        category: category as MemoryCategory,
+        content,
+        source: 'Reflection',
+        active: true,
+        created_at: now,
+        updated_at: now,
+      });
+    }
+    track('memory_created');
+    toast.success('Remembered. You can edit or forget it anytime in Memory.');
+  };
+
+  const bringItIn = (hit: SearchHit) => {
+    setApprovedContext((prev) => (prev.some((c) => c.entryId === hit.entryId) ? prev : [...prev, hit]));
+  };
+
+  const removeApproved = (entryId: string) => {
+    setApprovedContext((prev) => prev.filter((c) => c.entryId !== entryId));
+  };
+
   const busy = chat.status === 'submitted' || chat.status === 'streaming';
   const failed = chat.status === 'error';
   const empty = chat.messages.length === 0;
@@ -320,6 +391,11 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     <div className="flex h-full min-h-0 flex-col">
       {mode === "guest" && <OnboardingDialogs />}
       <MigrationDialog enabled={mode === "account"} />
+      <SignInDialog
+        open={signInOpen}
+        onOpenChange={setSignInOpen}
+        title="Create an account to keep this reflection."
+      />
 
       {ceremony && (
         <DrawCeremony count={ceremony.cards.length} onCancel={() => setCeremony(null)} onComplete={completeCeremony} />
@@ -405,6 +481,26 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
                           onRevealComplete={() => track('tarot_completed')}
                         />
                       )}
+                      {(meta?.approvedContext?.length ?? 0) > 0 && (
+                        <div className="flex flex-wrap justify-end gap-1.5">
+                          {meta!.approvedContext!.map((chip) => (
+                            <span
+                              key={chip.entryId}
+                              className="flex items-center gap-1 rounded-full border border-border bg-muted px-2.5 py-0.5 text-xs text-muted-foreground"
+                            >
+                              Using: &ldquo;{chip.title}&rdquo;
+                              <button
+                                type="button"
+                                aria-label={`Remove context ${chip.title}`}
+                                className="text-muted-foreground hover:text-foreground"
+                                onClick={() => removeApproved(chip.entryId)}
+                              >
+                                ✕
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
                       <div className="flex justify-end">
                         <div
                           className={`max-w-[85%] rounded-2xl rounded-br-sm bg-secondary px-4 py-2.5 leading-7 whitespace-pre-wrap ${
@@ -426,11 +522,19 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
                     <ToolPartRenderer
                       message={message}
                       declined={declinedToolCalls.has(message.id)}
-                      onPickSpread={(spreadId, drawMode) =>
+                      onPickSpread={(spreadId: string, drawMode: 'quick' | 'interactive') =>
                         drawMode === 'quick' ? void startQuickDraw(spreadId) : void startInteractiveDraw(spreadId)
                       }
                       onDeclineSpread={() => setDeclinedToolCalls((prev) => new Set(prev).add(message.id))}
                       onRetryDraw={() => chat.regenerate()}
+                      confirm={{
+                        actedIds: actedConfirms,
+                        markActed: markActed,
+                        approvedEntryIds: new Set(approvedContext.map((c) => c.entryId)),
+                        onSaveInsight: (text) => void saveInsightText(text),
+                        onRememberThis: (content, category) => void rememberThis(content, category),
+                        onBringItIn: bringItIn,
+                      }}
                     />
                     {modelDrawPanel && meta?.readingId && readings[meta.readingId] && (
                       <TarotSpread
