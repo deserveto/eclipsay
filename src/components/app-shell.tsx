@@ -6,6 +6,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { BookOpen, Compass, Menu, NotebookPen, Plus, Settings, Brain } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
+import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import { Separator } from '@/components/ui/separator';
 import { useDataMode } from '@/hooks/use-data-mode';
 import { loadGuestStore } from '@/lib/guest/store';
@@ -15,6 +16,21 @@ function RecentSessions({ onNavigate }: { onNavigate?: () => void }) {
   const [sessions, setSessions] = useState<{ id: string; title: string; updated_at: string }[]>([]);
 
   useEffect(() => {
+    if (mode === 'account' && isSupabaseConfigured()) {
+      const supabase = createClient();
+      let cancelled = false;
+      supabase
+        .from('reflection_sessions')
+        .select('id, title, updated_at')
+        .order('updated_at', { ascending: false })
+        .limit(20)
+        .then(({ data }) => {
+          if (!cancelled) setSessions((data ?? []) as { id: string; title: string; updated_at: string }[]);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
     const read = () => {
       const store = loadGuestStore();
       setSessions(

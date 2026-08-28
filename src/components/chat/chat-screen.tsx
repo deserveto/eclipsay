@@ -12,12 +12,15 @@ import { OnboardingDialogs } from '@/components/chat/onboarding-dialogs';
 import { ToolPartRenderer } from '@/components/chat/tool-parts';
 import { TarotSpread, DrawFailedCard } from '@/components/tarot/tarot-spread';
 import { DrawCeremony } from '@/components/tarot/draw-ceremony';
+import { MigrationDialog } from '@/components/auth/migration-dialog';
 import { useDataMode } from '@/hooks/use-data-mode';
+import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import { getSpread, SPREADS } from '@/lib/tarot/spreads';
 import { track } from '@/lib/analytics';
 import { joinUiText, storedToUi, type ChatMessage } from '@/lib/chat/convert';
 import { appendMessage, getGuestSession, saveReading, saveSession } from '@/lib/guest/store';
 import type { DrawnCard } from '@/lib/tarot/types';
+import type { StoredMessage, TarotReading } from '@/lib/types';
 
 function titleFrom(text: string): string {
   const compact = text.replace(/\s+/g, ' ').trim();
@@ -66,18 +69,41 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
 
   // Hydrate transcript + readings on deep link (never re-generate, PRD §26).
   useEffect(() => {
-    const session = getGuestSession(sessionId);
-    if (session) {
-      initialMessageIds.current = new Set(session.messages.map((m) => m.id));
-      if (session.messages.length > 0) {
-        chat.setMessages(session.messages.map(storedToUi));
+    const hydrate = async () => {
+      // Account mode: messages + readings come from Supabase (RLS-scoped, §34).
+      if (mode === 'account' && isSupabaseConfigured()) {
+        const supabase = createClient();
+        const [msgs, reads] = await Promise.all([
+          supabase.from('messages').select('*').eq('session_id', sessionId).order('created_at'),
+          supabase.from('tarot_readings').select('*').eq('session_id', sessionId).order('created_at'),
+        ]);
+        const dbMessages = (msgs.data ?? []) as unknown as StoredMessage[];
+        if (dbMessages.length > 0) {
+          initialMessageIds.current = new Set(dbMessages.map((m) => m.id));
+          chat.setMessages(dbMessages.map(storedToUi));
+        }
+        const dbReadings: ReadingsState = {};
+        for (const r of (reads.data ?? []) as unknown as TarotReading[]) {
+          dbReadings[r.id] = { spreadId: r.spread_id, cards: r.cards };
+        }
+        setReadings(dbReadings);
+        return;
       }
-      const stored: ReadingsState = {};
-      for (const r of session.readings) stored[r.id] = { spreadId: r.spread_id, cards: r.cards };
-      setReadings(stored);
-    }
+      // Guest mode: everything lives in localStorage.
+      const session = getGuestSession(sessionId);
+      if (session) {
+        initialMessageIds.current = new Set(session.messages.map((m) => m.id));
+        if (session.messages.length > 0) {
+          chat.setMessages(session.messages.map(storedToUi));
+        }
+        const stored: ReadingsState = {};
+        for (const r of session.readings) stored[r.id] = { spreadId: r.spread_id, cards: r.cards };
+        setReadings(stored);
+      }
+    };
+    void hydrate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  }, [sessionId, mode]);
 
   // Pre-fill composer from "Reflect with tarot" entry action.
   useEffect(() => {
@@ -292,7 +318,8 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {mode === 'guest' && <OnboardingDialogs />}
+      {mode === "guest" && <OnboardingDialogs />}
+      <MigrationDialog enabled={mode === "account"} />
 
       {ceremony && (
         <DrawCeremony count={ceremony.cards.length} onCancel={() => setCeremony(null)} onComplete={completeCeremony} />

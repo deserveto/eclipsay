@@ -13,7 +13,7 @@ import { buildSystemPrompt } from '@/lib/ai/system-prompt';
 import { classify } from '@/lib/ai/safety';
 import { createTarotTools } from '@/lib/ai/tools';
 import { createClient, getAuthUser, isSupabaseServerConfigured } from '@/lib/supabase/server';
-import type { MessageMeta } from '@/lib/types';
+import type { MessageMeta, Profile } from '@/lib/types';
 
 export const maxDuration = 60;
 
@@ -57,6 +57,7 @@ export async function POST(request: Request) {
   const safety = classify(userText);
 
   let user: User | null = null;
+  let profile: Profile | null = null;
   if (isSupabaseServerConfigured()) {
     user = await getAuthUser();
   }
@@ -67,6 +68,27 @@ export async function POST(request: Request) {
       return Response.json({ error: 'session_required' }, { status: 400 });
     }
     const supabase = await createClient();
+
+    // Ensure the profile row exists and personalize (PRD §12, §59).
+    const { data: existingProfile } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .maybeSingle();
+    if (existingProfile) {
+      profile = existingProfile;
+    } else {
+      const seedProfile = {
+        id: user.id,
+        display_name: null,
+        reflection_goal: null,
+        tarot_familiarity: null,
+      memory_enabled: true,
+      created_at: new Date().toISOString(),
+    };
+    await supabase.from('profiles').upsert(seedProfile);
+    }
+
     const { data: existing } = await supabase
       .from('reflection_sessions')
       .select('id')
@@ -95,7 +117,7 @@ export async function POST(request: Request) {
 
   const result = streamText({
     model: getModel(),
-    system: buildSystemPrompt({ profile: null, memories: [], safety }),
+    system: buildSystemPrompt({ profile, memories: [], safety }),
     messages: await convertToModelMessages(messages),
     stopWhen: isStepCount(5),
     tools,
