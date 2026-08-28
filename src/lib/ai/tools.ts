@@ -127,6 +127,28 @@ export function createTarotTools({ user, sessionId }: { user: User | null; sessi
         };
       },
     }),
+
+    create_followup: tool({
+      description:
+        'Schedule an in-app check-in on this reflection. Compute the due date from the choice; today counts from now.',
+      inputSchema: z.object({
+        when: z.enum(['tomorrow', '3days', '1week', 'custom']),
+        customDate: z.string().optional().describe('ISO date for custom; required when when=custom'),
+      }),
+      execute: async ({ when, customDate }) => {
+        const now = Date.now();
+        const day = 24 * 60 * 60 * 1000;
+        let dueAt: string;
+        if (when === 'custom' && customDate) {
+          const parsed = new Date(customDate);
+          if (Number.isNaN(parsed.getTime())) return { error: 'invalid_date' as const };
+          dueAt = parsed.toISOString();
+        } else if (when === 'tomorrow') dueAt = new Date(now + day).toISOString();
+        else if (when === '3days') dueAt = new Date(now + 3 * day).toISOString();
+        else dueAt = new Date(now + 7 * day).toISOString();
+        return { followupId: globalThis.crypto.randomUUID(), when, dueAt };
+      },
+    }),
   };
 }
 

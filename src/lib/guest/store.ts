@@ -1,4 +1,6 @@
 import type {
+  FollowUp,
+  FollowUpStatus,
   JournalEntry,
   Memory,
   Profile,
@@ -33,11 +35,21 @@ export type GuestStore = {
   journal: JournalEntry[];
   insights: JournalEntry[];
   memories: Memory[];
+  followUps: FollowUp[];
 };
 
 export function emptyGuestStore(): GuestStore {
-  return { version: 1, profile: {}, sessions: [], journal: [], insights: [], memories: [] };
+  return {
+    version: 1,
+    profile: {},
+    sessions: [],
+    journal: [],
+    insights: [],
+    memories: [],
+    followUps: [],
+  };
 }
+
 
 function defaultStorage(): Storage | null {
   if (typeof window === 'undefined') return null;
@@ -176,4 +188,34 @@ export function goalToDb(goal: ReflectionGoal | undefined): Profile['reflection_
 
 export function familiarityToDb(f: TarotFamiliarity | undefined): Profile['tarot_familiarity'] {
   return f ?? null;
+}
+
+export function saveFollowUp(followUp: FollowUp, storage?: Storage): void {
+  mutate((store) => {
+    if (!store.followUps.some((f) => f.id === followUp.id)) store.followUps.unshift(followUp);
+  }, storage);
+}
+
+export function updateFollowUpStatus(id: string, status: FollowUpStatus, storage?: Storage): void {
+  mutate((store) => {
+    const followUp = store.followUps.find((f) => f.id === id);
+    if (followUp) followUp.status = status;
+  }, storage);
+}
+
+export function clearGuestHistory(storage?: Storage): void {
+  mutate((store) => {
+    store.sessions = [];
+    store.followUps = [];
+  }, storage);
+}
+
+export function clearAllGuestMemories(storage?: Storage): void {
+  mutate((store) => {
+    store.memories = [];
+  }, storage);
+}
+
+export function dueGuestFollowUps(now = new Date()): FollowUp[] {
+  return loadGuestStore().followUps.filter((f) => f.status === 'pending' && new Date(f.due_at) <= now);
 }

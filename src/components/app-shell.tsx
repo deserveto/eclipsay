@@ -3,11 +3,12 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
-import { BookOpen, Compass, Menu, NotebookPen, Plus, Settings, Brain } from 'lucide-react';
+import { Compass, Menu, NotebookPen, Plus, Settings, Brain } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
-import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import { Separator } from '@/components/ui/separator';
+import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
+import { FollowUpBanner } from '@/components/followups/followup-banner';
 import { useDataMode } from '@/hooks/use-data-mode';
 import { loadGuestStore } from '@/lib/guest/store';
 
@@ -92,32 +93,9 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-function SidebarInner({ onNavigate }: { onNavigate?: () => void }) {
-  return (
-    <div className="flex h-full flex-col px-3 py-4">
-      <Button asChild variant="secondary" className="mb-4 justify-start gap-2">
-        <Link href="/reflect" onClick={onNavigate}>
-          <Plus className="size-4" aria-hidden />
-          New Reflection
-        </Link>
-      </Button>
-      <RecentSessions onNavigate={onNavigate} />
-      <Separator className="my-4" />
-      <NavLinks onNavigate={onNavigate} />
-      <div className="mt-auto">
-        <Separator className="mb-4" />
-        <NavLinksBottom onNavigate={onNavigate} />
-      </div>
-    </div>
-  );
-}
-
 function NavLinksBottom({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
-  const items = [
-    { href: '/profile', label: 'Profile', icon: BookOpen },
-    { href: '/settings', label: 'Settings', icon: Settings },
-  ];
+  const items = [{ href: '/profile', label: 'Profile', icon: NotebookPen }, { href: '/settings', label: 'Settings', icon: Settings }];
   return (
     <nav className="flex flex-col gap-0.5" aria-label="Account">
       {items.map(({ href, label, icon: Icon }) => (
@@ -140,6 +118,26 @@ function NavLinksBottom({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
+function SidebarInner({ onNavigate }: { onNavigate?: () => void }) {
+  return (
+    <div className="flex h-full flex-col px-3 py-4">
+      <Button asChild variant="secondary" className="mb-4 justify-start gap-2">
+        <Link href="/reflect" onClick={onNavigate}>
+          <Plus className="size-4" aria-hidden />
+          New Reflection
+        </Link>
+      </Button>
+      <RecentSessions onNavigate={onNavigate} />
+      <Separator className="my-4" />
+      <NavLinks onNavigate={onNavigate} />
+      <div className="mt-auto">
+        <Separator className="mb-4" />
+        <NavLinksBottom onNavigate={onNavigate} />
+      </div>
+    </div>
+  );
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   return (
@@ -148,6 +146,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <SidebarInner />
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
+        <FollowUpBanner />
         <header className="flex items-center gap-2 border-b px-3 py-2 md:hidden">
           <Sheet open={open} onOpenChange={setOpen}>
             <SheetTrigger asChild>

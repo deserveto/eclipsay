@@ -9,7 +9,7 @@ import { Separator } from '@/components/ui/separator';
 import { SignInDialog } from '@/components/auth/sign-in-dialog';
 import { useDataMode } from '@/hooks/use-data-mode';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
-import { clearGuestData, loadGuestStore, saveGuestProfile } from '@/lib/guest/store';
+import { clearGuestData, clearGuestHistory, loadGuestStore, saveGuestProfile } from '@/lib/guest/store';
 import type { Profile, ReflectionGoal, TarotFamiliarity } from '@/lib/types';
 import { toast } from 'sonner';
 
@@ -78,6 +78,66 @@ export function SettingsForm() {
     setProfile(row as Profile);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  };
+
+  const exportData = async () => {
+    let payload: unknown;
+    if (mode === 'account' && isSupabaseConfigured()) {
+      const supabase = createClient();
+      const [sessions, messages, readings, journal, memories, followUps] = await Promise.all([
+        supabase.from('reflection_sessions').select('*'),
+        supabase.from('messages').select('*'),
+        supabase.from('tarot_readings').select('*'),
+        supabase.from('journal_entries').select('*'),
+        supabase.from('memories').select('*'),
+        supabase.from('follow_ups').select('*'),
+      ]);
+      payload = {
+        exportedAt: new Date().toISOString(),
+        sessions: sessions.data ?? [],
+        messages: messages.data ?? [],
+        readings: readings.data ?? [],
+        journal: journal.data ?? [],
+        memories: memories.data ?? [],
+        followUps: followUps.data ?? [],
+      };
+    } else {
+      payload = loadGuestStore();
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'eclipsay-data.json';
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success('Your data has been exported.');
+  };
+
+  const clearHistory = async () => {
+    if (mode === 'account' && isSupabaseConfigured()) {
+      const supabase = createClient();
+      const { error } = await supabase.from('reflection_sessions').select('id').limit(1);
+      if (error) return;
+      await supabase.from('follow_ups').delete().neq('id', crypto.randomUUID());
+      await supabase.from('reflection_sessions').delete().neq('id', crypto.randomUUID());
+      toast.success('History cleared.');
+      return;
+    }
+    clearGuestHistory();
+    toast.success('Guest history cleared.');
+  };
+
+  const deleteAccount = async () => {
+    const res = await fetch('/api/account/delete', { method: 'POST' });
+    if (!res.ok) {
+      toast.error('Account deletion failed. Try again or contact support.');
+      return;
+    }
+    if (isSupabaseConfigured()) {
+      await createClient().auth.signOut();
+    }
+    window.location.href = '/';
   };
 
   return (
@@ -198,9 +258,37 @@ export function SettingsForm() {
             </Button>
           </div>
         )}
-        <p className="text-xs text-muted-foreground">
-          Full data controls (export, deletion, account removal) live here once your account is set up.
-        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" size="sm" onClick={exportData}>
+            Export my data (JSON)
+          </Button>
+          {mode === 'account' && (
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  if (window.confirm('Clear your entire reflection history? Journal and memories stay.')) {
+                    void clearHistory();
+                  }
+                }}
+              >
+                Clear History
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => {
+                  if (window.confirm('Delete your account and ALL of its data? This cannot be undone.')) {
+                    void deleteAccount();
+                  }
+                }}
+              >
+                Delete account
+              </Button>
+              </>
+          )}
+        </div>
       </section>
 
       <SignInDialog open={signInOpen} onOpenChange={setSignInOpen} />

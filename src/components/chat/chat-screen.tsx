@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, isStaticToolUIPart } from 'ai';
-import { ArrowUp, RefreshCw, PenLine, Sparkles } from 'lucide-react';
+import { ArrowUp, RefreshCw, PenLine, Sparkles, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Markdown } from '@/components/chat/markdown';
@@ -15,12 +15,12 @@ import { toast } from 'sonner';
 import { TarotSpread, DrawFailedCard } from '@/components/tarot/tarot-spread';
 import { DrawCeremony } from '@/components/tarot/draw-ceremony';
 import { ToolPartRenderer, type SearchHit } from '@/components/chat/tool-parts';
+import { track } from '@/lib/analytics';
 import { useDataMode } from '@/hooks/use-data-mode';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import { getSpread, SPREADS } from '@/lib/tarot/spreads';
-import { track } from '@/lib/analytics';
+import { appendMessage, getGuestSession, saveFollowUp, saveInsight as saveGuestInsight, saveMemory, saveReading, saveSession } from '@/lib/guest/store';
 import { joinUiText, storedToUi, type ChatMessage } from '@/lib/chat/convert';
-import { appendMessage, getGuestSession, saveInsight as saveGuestInsight, saveMemory, saveReading, saveSession } from '@/lib/guest/store';
 import { makeEntry } from '@/lib/journal/entries';
 import type { DrawnCard } from '@/lib/tarot/types';
 import type { MemoryCategory, StoredMessage, TarotReading } from '@/lib/types';
@@ -52,6 +52,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   const [declinedToolCalls, setDeclinedToolCalls] = useState<Set<string>>(new Set());
   const [ceremony, setCeremony] = useState<{ cards: DrawnCard[]; readingId: string; spreadId: string } | null>(null);
   const [drawFailedSpread, setDrawFailedSpread] = useState<string | null>(null);
+  const [checkInOpen, setCheckInOpen] = useState(false);
   const [signInOpen, setSignInOpen] = useState(false);
   const [actedConfirms, setActedConfirms] = useState<Set<string>>(new Set());
   const [approvedContext, setApprovedContext] = useState<SearchHit[]>([]);
@@ -347,6 +348,36 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     toast.success('Insight saved to your journal.');
   };
 
+  const scheduleFollowUp = async (when: 'tomorrow' | '3days' | '1week') => {
+    const day = 24 * 60 * 60 * 1000;
+    const dueAt =
+      when === 'tomorrow' ? new Date(Date.now() + day) : when === '3days' ? new Date(Date.now() + 3 * day) : new Date(Date.now() + 7 * day);
+    const followUp: import('@/lib/types').FollowUp = {
+      id: crypto.randomUUID(),
+      user_id: '',
+      session_id: sessionId,
+      journal_entry_id: null,
+      due_at: dueAt.toISOString(),
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    };
+    if (mode === 'account' && isSupabaseConfigured()) {
+      const res = await fetch('/api/followups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, dueAt: followUp.due_at }),
+      });
+      if (!res.ok) {
+        toast.error('Could not schedule the check-in.');
+        return;
+      }
+    } else {
+      saveFollowUp(followUp);
+    }
+    track('followup_created');
+    toast.success('Check-in scheduled. Eclipsay will remind you here in the app.');
+  };
+
   const rememberThis = async (content: string, category: string) => {
     const now = new Date().toISOString();
     if (mode === 'account' && isSupabaseConfigured()) {
@@ -400,6 +431,45 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
       {ceremony && (
         <DrawCeremony count={ceremony.cards.length} onCancel={() => setCeremony(null)} onComplete={completeCeremony} />
       )}
+      {checkInOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Schedule a check-in"
+        >
+          <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-5 shadow-xl">
+            <h2 className="text-base font-medium">Check in with me later</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              A gentle in-app reminder to revisit this reflection. No emails, no pressure.
+            </p>
+            <div className="mt-4 flex flex-col gap-2">
+              {(
+                [
+                  { key: 'tomorrow', label: 'Tomorrow' },
+                  { key: '3days', label: 'In 3 days' },
+                  { key: '1week', label: 'In 1 week' },
+                ] as const
+              ).map(({ key, label }) => (
+                <Button
+                  key={key}
+                  variant="secondary"
+                  onClick={() => {
+                    setCheckInOpen(false);
+                    void scheduleFollowUp(key);
+                  }}
+                >
+                  {label}
+                </Button>
+              ))}
+              <Button variant="ghost" onClick={() => setCheckInOpen(false)}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {spreadPickerOpen && (
         <div
           className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center"
@@ -606,6 +676,16 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
             send(input);
           }}
         >
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            aria-label="Check in with me later"
+            title="Check in with me later"
+            onClick={() => setCheckInOpen(true)}
+          >
+            <Clock className="size-4 text-primary" aria-hidden />
+          </Button>
           <Button
             type="button"
             size="icon"
