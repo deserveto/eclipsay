@@ -134,7 +134,7 @@ export type ContextChip = {
 
 export type MessageMeta = {
   readingId?: string;
-  spreadSuggestion?: { options: SpreadOption[] };
+  clarify?: { readingId: string; targetCardId: string; clarifierCardId: string };
   confirm?: ConfirmCard;
   contextChips?: ContextChip[];
   drawFailed?: boolean;

@@ -11,7 +11,9 @@ import type { User } from '@supabase/supabase-js';
 import { getModel, isAiConfigured } from '@/lib/ai/provider';
 import { buildSystemPrompt } from '@/lib/ai/system-prompt';
 import { classify } from '@/lib/ai/safety';
+import { createTarotTools } from '@/lib/ai/tools';
 import { createClient, getAuthUser, isSupabaseServerConfigured } from '@/lib/supabase/server';
+import type { MessageMeta } from '@/lib/types';
 
 export const maxDuration = 60;
 
@@ -88,11 +90,15 @@ export async function POST(request: Request) {
     if (error) return Response.json({ error: 'persist_failed' }, { status: 500 });
   }
 
+  // High-stakes conversations get NO tarot tools at all (plan: Safety classifier).
+  const tools = safety.highStakes ? undefined : createTarotTools({ user, sessionId: effectiveSessionId });
+
   const result = streamText({
     model: getModel(),
     system: buildSystemPrompt({ profile: null, memories: [], safety }),
     messages: await convertToModelMessages(messages),
     stopWhen: isStepCount(5),
+    tools,
   });
 
   if (user && effectiveSessionId) {
@@ -101,13 +107,34 @@ export async function POST(request: Request) {
     const userId = user.id;
     void (async () => {
       try {
-        const text = await result.text;
+        const [text, responseMessages] = await Promise.all([result.text, result.responseMessages]);
+        const meta: MessageMeta = {};
+        for (const message of responseMessages) {
+          const content = typeof message.content === 'string' ? [] : message.content;
+          for (const part of content) {
+            if (part.type !== 'tool-result') continue;
+            const output = part.output as Record<string, unknown> | undefined;
+            if (part.toolName === 'suggest_spread' && output?.options) {
+              meta.spreadSuggestion = output as NonNullable<MessageMeta['spreadSuggestion']>;
+            }
+            if (part.toolName === 'draw_tarot_cards' && output?.cards) {
+              meta.readingId = output.readingId as string;
+            }
+            if (part.toolName === 'request_clarification' && output?.clarifier) {
+              meta.clarify = {
+                readingId: output.readingId as string,
+                targetCardId: output.cardId as string,
+                clarifierCardId: (output.clarifier as { cardId: string }).cardId,
+              };
+            }
+          }
+        }
         await supabase.from('messages').insert({
           session_id: sid,
           user_id: userId,
           role: 'assistant',
           content: text,
-          meta: {},
+          meta,
         });
         await supabase.from('reflection_sessions').update({ updated_at: new Date().toISOString() }).eq('id', sid);
       } catch {
