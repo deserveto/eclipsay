@@ -134,6 +134,19 @@ export function appendMessage(sessionId: string, message: StoredMessage, storage
   }, storage);
 }
 
+export function updateMessageMeta(
+  sessionId: string,
+  messageId: string,
+  patch: Partial<StoredMessage['meta']>,
+  storage?: Storage,
+): void {
+  mutate((store) => {
+    const message = store.sessions.find((s) => s.id === sessionId)?.messages.find((m) => m.id === messageId);
+    if (!message) return;
+    message.meta = { ...message.meta, ...patch };
+  }, storage);
+}
+
 export function saveReading(sessionId: string, reading: TarotReading, storage?: Storage): void {
   mutate((store) => {
     const session = store.sessions.find((s) => s.id === sessionId);

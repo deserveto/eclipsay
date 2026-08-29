@@ -8,6 +8,7 @@ import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import { dueGuestFollowUps, updateFollowUpStatus } from '@/lib/guest/store';
 import { track } from '@/lib/analytics';
 import type { FollowUp } from '@/lib/types';
+import { toast } from 'sonner';
 
 // In-app follow-up banner (PRD §46): warm, no guilt copy.
 type Due = { id: string; sessionId: string | null; dueAt: string };
@@ -20,11 +21,42 @@ function humanGap(dueAt: string): string {
   return `after one week`.replace('one week', weeks === 1 ? 'one week' : `${weeks} weeks`);
 }
 
+const SNOOZE_KEY = 'eclipsay.followups.snoozed';
+
+// "Later" persists per browser for 24h so the banner stays gone across
+// navigation and remounts; expired entries simply stop matching.
+function readSnoozed(): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(SNOOZE_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    const now = Date.now();
+    return new Set(
+      Object.entries(parsed)
+        .filter(([, until]) => new Date(until).getTime() > now)
+        .map(([id]) => id),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function snoozeUntil(id: string): void {
+  try {
+    const raw = window.localStorage.getItem(SNOOZE_KEY);
+    const parsed = raw ? (JSON.parse(raw) as Record<string, string>) : {};
+    parsed[id] = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    window.localStorage.setItem(SNOOZE_KEY, JSON.stringify(parsed));
+  } catch {
+    // Storage unavailable: snooze stays session-only.
+  }
+}
+
 export function FollowUpBanner() {
   const { mode } = useDataMode();
   const router = useRouter();
   const [due, setDue] = useState<Due | null>(null);
-  const [snoozed, setSnoozed] = useState<Set<string>>(new Set());
+  const [snoozed, setSnoozed] = useState<Set<string>>(() => readSnoozed());
 
   useEffect(() => {
     if (mode === 'account' && isSupabaseConfigured()) {
@@ -58,20 +90,21 @@ export function FollowUpBanner() {
 
   if (!due || snoozed.has(due.id)) return null;
 
-  const setStatus = (status: 'revisited' | 'dismissed') => {
+  const setStatus = async (status: 'revisited' | 'dismissed') => {
     if (mode === 'account' && isSupabaseConfigured()) {
-      void fetch('/api/followups', {
+      const res = await fetch('/api/followups', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: due.id, status }),
       });
+      if (!res.ok) toast.error('Could not update the check-in. It may reappear.');
       return;
     }
     updateFollowUpStatus(due.id, status);
   };
 
   const revisit = () => {
-    setStatus('revisited');
+    void setStatus('revisited');
     track('followup_revisited');
     setDue(null);
     if (due.sessionId) router.push(`/reflect/${due.sessionId}?followup=${due.id}`);
@@ -96,7 +129,12 @@ export function FollowUpBanner() {
         <Button
           size="sm"
           variant="ghost"
-          onClick={() => setSnoozed((prev) => new Set(prev).add(due.id))}
+          onClick={() => {
+            // "Later" must survive navigation: persist until tomorrow, not
+            // just component state.
+            snoozeUntil(due.id);
+            setSnoozed((prev) => new Set(prev).add(due.id));
+          }}
         >
           Later
         </Button>
@@ -104,8 +142,9 @@ export function FollowUpBanner() {
           size="sm"
           variant="ghost"
           onClick={() => {
-            setStatus('dismissed');
-            setDue(null);
+            void setStatus('dismissed').then(() => {
+              setDue(null);
+            });
           }}
         >
           Dismiss

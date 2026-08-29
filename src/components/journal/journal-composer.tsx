@@ -197,7 +197,9 @@ function ComposerInner() {
               size="sm"
               onClick={() => {
                 if (window.confirm('Delete this journal entry? This cannot be undone.')) {
-                  void removeEntry(entry.id).then(() => router.push('/journal'));
+                  void removeEntry(entry.id)
+                    .then(() => router.push('/journal'))
+                    .catch(() => toast.error('Could not delete the entry. Try again.'));
                 }
               }}
             >

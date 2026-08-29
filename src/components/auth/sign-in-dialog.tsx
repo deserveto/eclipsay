@@ -79,7 +79,14 @@ export function SignInDialog({
               onChange={(e) => setEmail(e.target.value)}
               aria-label="Email address"
             />
-            {error && <p className="text-xs text-destructive">{error}</p>}
+            {error && (
+              <p role="alert" className="text-xs text-destructive">
+                {error}
+              </p>
+            )}
+            {email.length > 0 && !email.includes('@') && (
+              <p className="text-xs text-muted-foreground">Enter a valid email to continue.</p>
+            )}
             <Button disabled={busy || !email.includes('@')} onClick={sendMagicLink}>
               {busy ? 'Sending…' : 'Email me a sign-in link'}
             </Button>

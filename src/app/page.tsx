@@ -4,6 +4,7 @@ import { MessagesSquare, Sparkles, NotebookPen } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { getAuthUser, isSupabaseServerConfigured } from '@/lib/supabase/server';
 import { WelcomeBack } from '@/components/landing/welcome-back';
+import { ThemeToggle } from '@/components/theme-toggle';
 
 // Landing (PRD §11.1): guest-first, "What's on your mind?" + three entry actions.
 // Signed-in users go straight to the reflection space.
@@ -35,7 +36,10 @@ export default async function Home() {
   ];
 
   return (
-    <main className="flex min-h-dvh flex-col items-center justify-center px-6 py-16">
+    <main className="relative flex min-h-dvh flex-col items-center justify-center px-6 py-16">
+      <div className="absolute right-4 top-4 sm:right-6 sm:top-6">
+        <ThemeToggle />
+      </div>
       <div className="w-full max-w-xl space-y-10 text-center">
         <div className="space-y-3">
           <p className="text-sm tracking-wide text-primary">ECLIPSAY</p>

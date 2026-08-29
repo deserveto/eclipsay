@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import Link from 'next/link';
 import { SPREADS } from '@/lib/tarot/spreads';
 import { ALL_CARDS } from '@/lib/tarot/cards';
@@ -18,6 +18,7 @@ const FILTERS = [
 export function ExploreView() {
   const [filter, setFilter] = useState<(typeof FILTERS)[number]['value']>('all');
   const [tab, setTab] = useState<'cards' | 'spreads'>('cards');
+  const tabRefs = useRef<Partial<Record<'cards' | 'spreads', HTMLButtonElement | null>>>({});
 
   const cards = ALL_CARDS.filter((c) => filter === 'all' || c.arcana === filter);
 
@@ -31,12 +32,27 @@ export function ExploreView() {
       </header>
 
       <div className="flex gap-2" role="tablist" aria-label="Library">
-        {(['cards', 'spreads'] as const).map((t) => (
+        {(['cards', 'spreads'] as const).map((t, i) => (
           <button
             key={t}
+            ref={(el) => {
+              tabRefs.current[t] = el;
+            }}
+            type="button"
             role="tab"
+            id={`library-tab-${t}`}
             aria-selected={tab === t}
+            aria-controls={`library-panel-${t}`}
+            tabIndex={tab === t ? 0 : -1}
             onClick={() => setTab(t)}
+            onKeyDown={(e) => {
+              // Two-panel tablist: both arrows cycle to the other tab.
+              if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+              e.preventDefault();
+              const next = (['cards', 'spreads'] as const)[1 - i];
+              setTab(next);
+              tabRefs.current[next]?.focus();
+            }}
             className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${
               tab === t ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-accent'
             }`}
@@ -47,7 +63,7 @@ export function ExploreView() {
       </div>
 
       {tab === 'cards' && (
-        <>
+        <div role="tabpanel" id="library-panel-cards" aria-labelledby="library-tab-cards" tabIndex={0} className="space-y-4">
           <div className="flex flex-wrap gap-2" role="group" aria-label="Filter cards">
             {FILTERS.map((f) => (
               <button
@@ -69,15 +85,17 @@ export function ExploreView() {
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={`/cards/rws/${card.id}.jpg`} alt={card.name} className="aspect-[2/3.4] w-full object-cover" loading="lazy" />
                 </div>
-                <p className="mt-1 truncate text-xs text-muted-foreground">{card.name}</p>
+              <p className="mt-1 truncate text-xs text-muted-foreground" title={card.name}>
+                {card.name}
+              </p>
               </Link>
             ))}
           </div>
-        </>
+        </div>
       )}
 
       {tab === 'spreads' && (
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div role="tabpanel" id="library-panel-spreads" aria-labelledby="library-tab-spreads" tabIndex={0} className="grid gap-3 sm:grid-cols-2">
           {SPREADS.map((spread) => (
             <div
               key={spread.id}

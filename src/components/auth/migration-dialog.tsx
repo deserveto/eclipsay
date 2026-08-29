@@ -104,6 +104,9 @@ export function MigrationDialog({ enabled }: { enabled: boolean }) {
   };
 
   const startFresh = () => {
+    // Destructive: this permanently deletes every guest record in this
+    // browser. Same guard as the settings clear path (repo convention).
+    if (!window.confirm('Delete all local reflections without importing? This cannot be undone.')) return;
     clearGuestData();
     localStorage.setItem(MIGRATION_PROMPT_KEY, '1');
     setOpen(false);
@@ -119,7 +122,7 @@ export function MigrationDialog({ enabled }: { enabled: boolean }) {
             everywhere.
           </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2" aria-live="polite">
           <Button onClick={importReflections} disabled={busy}>
             {busy ? 'Importing…' : 'Import reflections'}
           </Button>

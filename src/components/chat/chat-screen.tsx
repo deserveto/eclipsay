@@ -4,9 +4,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, isStaticToolUIPart } from 'ai';
-import { ArrowUp, RefreshCw, PenLine, Sparkles, Clock, NotebookPen } from 'lucide-react';
+import { RefreshCw, PenLine, NotebookPen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/textarea';
+import { AiChatInput } from '@/components/ui/ai-chat-input';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Markdown } from '@/components/chat/markdown';
 import { CrisisResources } from '@/components/chat/crisis-resources';
@@ -22,8 +22,8 @@ import { track } from '@/lib/analytics';
 import { useDataMode } from '@/hooks/use-data-mode';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import { getSpread } from '@/lib/tarot/spreads';
-import { appendMessage, getGuestSession, loadGuestStore, saveFollowUp, saveInsight as saveGuestInsight, saveMemory, saveReading, saveSession } from '@/lib/guest/store';
-import { joinUiText, storedToUi, type ChatMessage } from '@/lib/chat/convert';
+import { appendMessage, getGuestSession, loadGuestStore, saveFollowUp, saveInsight as saveGuestInsight, saveMemory, saveReading, saveSession, updateMessageMeta } from '@/lib/guest/store';
+import { extractToolParts, joinUiText, storedToUi, type ChatMessage } from '@/lib/chat/convert';
 import { makeEntry } from '@/lib/journal/entries';
 import type { DrawnCard } from '@/lib/tarot/types';
 import type { MemoryCategory, StoredMessage, TarotReading } from '@/lib/types';
@@ -100,19 +100,44 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   const [followupId] = useState(() => searchParams.get('followup'));
   const [followupDismissed, setFollowupDismissed] = useState(false);
   const [lastActiveAt, setLastActiveAt] = useState<string | null>(null);
+  // Confirm cards remember their resolved state across navigation (PRD §62):
+  // acted tool calls and declined recommendations restore from message meta.
+  const restoreConfirmState = (messages: StoredMessage[]) => {
+    const acted = new Set<string>();
+    const declined = new Set<string>();
+    for (const m of messages) {
+      for (const id of m.meta.actedToolCallIds ?? []) acted.add(id);
+      if (m.meta.declined) declined.add(m.id);
+    }
+    if (acted.size > 0) setActedConfirms(acted);
+    if (declined.size > 0) setDeclinedToolCalls(declined);
+  };
+
+  // A reading persisted without a transcript anchor means navigation (or a
+  // reload) interrupted the draw mid-bar. The cards are already fixed by the
+  // server seed (PRD §25), so resume the bar instead of losing the draw.
+  const resumeInterruptedDraw = (messages: StoredMessage[], allReadings: ReadingsState) => {
+    const anchored = new Set(messages.map((m) => m.meta?.readingId).filter(Boolean));
+    let orphan: { readingId: string; reading: { spreadId: string; cards: DrawnCard[] } } | null = null;
+    for (const [readingId, reading] of Object.entries(allReadings)) {
+      if (!anchored.has(readingId)) orphan = { readingId, reading };
+    }
+    if (orphan) setDrawBar({ readingId: orphan.readingId, spreadId: orphan.reading.spreadId, cards: orphan.reading.cards });
+  };
 
   const chat = useChat<ChatMessage>({
     id: sessionId,
     transport,
     onError: () => {},
     onFinish: (event) => {
+      const tools = extractToolParts(event.message);
       appendMessage(sessionId, {
         id: event.message.id,
         session_id: sessionId,
         user_id: '',
         role: 'assistant',
         content: joinUiText(event.message),
-        meta: event.message.metadata ?? {},
+        meta: { ...(event.message.metadata ?? {}), ...(tools.length > 0 ? { tools } : {}) },
         created_at: new Date().toISOString(),
       });
     },
@@ -139,6 +164,8 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
           dbReadings[r.id] = { spreadId: r.spread_id, cards: r.cards };
         }
         setReadings(dbReadings);
+        restoreConfirmState(dbMessages);
+        resumeInterruptedDraw(dbMessages, dbReadings);
         return;
       }
       // Guest mode: everything lives in localStorage.
@@ -152,6 +179,8 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
         for (const r of session.readings) stored[r.id] = { spreadId: r.spread_id, cards: r.cards };
         setReadings(stored);
         setLastActiveAt(session.updated_at);
+        restoreConfirmState(session.messages);
+        resumeInterruptedDraw(session.messages, stored);
       }
     };
     void hydrate();
@@ -217,6 +246,39 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
       }
     }
   }, [chat.messages, readings, sessionId]);
+
+  // A stream that outlives its mount (the user navigated away mid-reply)
+  // still persists through onFinish; merge whatever landed while we were
+  // gone. Skipped while a local generation is in flight so the live
+  // transcript is never clobbered.
+  useEffect(() => {
+    if (mode !== 'guest') return;
+    const merge = () => {
+      if (chat.status === 'submitted' || chat.status === 'streaming') return;
+      const session = getGuestSession(sessionId);
+      if (!session) return;
+      setReadings((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const r of session.readings) {
+          if (!next[r.id]) {
+            next[r.id] = { spreadId: r.spread_id, cards: r.cards };
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+      const known = new Set(chat.messages.map((m) => m.id));
+      const incoming = session.messages.filter((m) => !known.has(m.id));
+      if (incoming.length > 0) chat.setMessages([...chat.messages, ...incoming.map(storedToUi)]);
+    };
+    merge();
+    window.addEventListener('eclipsay:guest-store-changed', merge);
+    return () => window.removeEventListener('eclipsay:guest-store-changed', merge);
+
+    // `chat` is a stable hook object; messages/status are the real deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, sessionId, chat.messages, chat.status]);
 
   const ensureGuestSession = (firstText: string) => {
     if (!getGuestSession(sessionId)) {
@@ -354,7 +416,19 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
 
   // ── Propose-then-confirm actions (PRD §39, §41, §62) ─────────────────
 
-  const markActed = (toolCallId: string) => setActedConfirms((prev) => new Set(prev).add(toolCallId));
+  const handleActed = (messageId: string, toolCallId: string) => {
+    const next = new Set(actedConfirms).add(toolCallId);
+    setActedConfirms(next);
+    // Guests persist the resolved state so cards stay settled after
+    // navigating away and back (PRD §62).
+    if (mode === 'guest') updateMessageMeta(sessionId, messageId, { actedToolCallIds: [...next] });
+  };
+
+  const handleDeclined = (messageId: string) => {
+    const next = new Set(declinedToolCalls).add(messageId);
+    setDeclinedToolCalls(next);
+    if (mode === 'guest') updateMessageMeta(sessionId, messageId, { declined: true });
+  };
 
   const saveInsightText = async (text: string): Promise<boolean> => {
     const now = new Date().toISOString();
@@ -584,7 +658,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
                               <button
                                 type="button"
                                 aria-label={`Remove context ${chip.title}`}
-                                className="text-muted-foreground hover:text-foreground"
+                                className="grid size-6 place-items-center text-muted-foreground hover:text-foreground"
                                 onClick={() => removeApproved(chip.entryId)}
                               >
                                 ✕
@@ -612,11 +686,11 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
                       message={message}
                       declined={declinedToolCalls.has(message.id)}
                       onBeginReading={(spreadId) => void beginReading(spreadId)}
-                      onDecline={() => setDeclinedToolCalls((prev) => new Set(prev).add(message.id))}
+                      onDecline={() => handleDeclined(message.id)}
                       onAnswerClarify={(text) => send(text)}
                       confirm={{
                         actedIds: actedConfirms,
-                        markActed: markActed,
+                        markActed: (toolCallId) => handleActed(message.id, toolCallId),
                         approvedEntryIds: new Set(approvedContext.map((c) => c.entryId)),
                         onSaveInsight: (text) => void saveInsightText(text),
                         onRememberThis: (content, category) => void rememberThis(content, category),
@@ -700,52 +774,17 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
         </div>
       )}
 
-      <div className="border-t bg-background/95 px-4 py-3">
-        <form
-          className="mx-auto flex w-full max-w-2xl items-end gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            send(input);
-          }}
-        >
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            aria-label="Check in with me later"
-            title="Check in with me later"
-            onClick={() => setCheckInOpen(true)}
-          >
-            <Clock className="size-4 text-primary" aria-hidden />
-          </Button>
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            aria-label="Explore with cards"
-            title="Explore with cards"
-            onClick={() => setInput("I'd like to explore something with a few cards.")}
-          >
-            <Sparkles className="size-4 text-primary" aria-hidden />
-          </Button>
-          <Textarea
+      <div className="bg-background/95 px-4 pt-2 pb-3">
+        <div className="mx-auto w-full max-w-2xl">
+          <AiChatInput
             value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                send(input);
-              }
-            }}
-            placeholder="What's on your mind?"
-            aria-label="Message"
-            rows={1}
-            className="max-h-40 min-h-11 resize-none"
+            onValueChange={setInput}
+            onSubmit={() => send(input)}
+            onOpenCheckIn={() => setCheckInOpen(true)}
+            onExploreCards={() => setInput("I'd like to explore something with a few cards.")}
+            busy={busy}
           />
-          <Button type="submit" size="icon" disabled={busy || input.trim().length === 0} aria-label="Send">
-            <ArrowUp className="size-4" aria-hidden />
-          </Button>
-        </form>
+        </div>
       </div>
     </div>
   );

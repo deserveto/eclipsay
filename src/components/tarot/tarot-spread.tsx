@@ -143,7 +143,7 @@ export function TarotSpread({
                 <button
                   type="button"
                   disabled={clarifyingCardId === card.cardId}
-                  className="mt-1 w-fit rounded-md border border-white/25 px-2 py-0.5 text-[10px] opacity-85 transition-colors hover:bg-white/10 disabled:opacity-50"
+                  className="mt-1 min-h-6 w-fit rounded-md border border-white/25 px-2 py-1 text-[10px] opacity-85 transition-colors hover:bg-white/10 disabled:opacity-50"
                   onClick={() => onClarify(reading.readingId, card.cardId)}
                 >
                   {clarifyingCardId === card.cardId ? 'Clarifying…' : 'Clarify'}

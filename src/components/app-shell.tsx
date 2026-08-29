@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import { Brain, Compass, Menu, NotebookPen, PanelLeft, PanelLeftClose, Plus, Settings, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { ThemeToggle } from '@/components/theme-toggle';
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import { FollowUpBanner } from '@/components/followups/followup-banner';
@@ -148,7 +149,7 @@ function SidebarInner({ onNavigate }: { onNavigate?: () => void }) {
       <Link
         href="/reflect"
         onClick={onNavigate}
-        className="mb-3 flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg bg-primary text-sm font-medium text-primary-foreground transition-opacity hover:opacity-80 motion-reduce:transition-none"
+        className="mb-3 flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-[color-mix(in_oklch,var(--primary),var(--foreground)_8%)] motion-reduce:transition-none"
       >
         <Plus className="size-4" aria-hidden />
         New Reflection
@@ -193,6 +194,12 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-dvh overflow-hidden bg-background">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:rounded-lg focus:bg-card focus:px-3 focus:py-2 focus:text-sm focus:shadow-lg"
+      >
+        Skip to content
+      </a>
       <aside
         className={`hidden shrink-0 overflow-hidden border-r bg-sidebar transition-[width] duration-200 ease-out motion-reduce:transition-none md:block ${
           collapsed ? 'w-14' : 'w-64'
@@ -235,6 +242,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               ))}
             </nav>
             <div className="mt-auto flex flex-col items-center gap-1">
+              <ThemeToggle side="right" align="end" />
               {accountItems.map(({ href, label, icon: Icon }) => (
                 <Link
                   key={href}
@@ -263,16 +271,19 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <img src="/logo.webp" alt="Eclipsay logo" className="size-9 shrink-0" />
                 <span className="truncate text-sm tracking-wide text-primary">ECLIPSAY</span>
               </Link>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Collapse sidebar"
-                title="Collapse sidebar"
-                onClick={toggleCollapsed}
-                className="shrink-0 text-muted-foreground hover:text-foreground"
-              >
-                <PanelLeftClose className="size-4" aria-hidden />
-              </Button>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Collapse sidebar"
+                  title="Collapse sidebar"
+                  onClick={toggleCollapsed}
+                  className="shrink-0 text-muted-foreground hover:text-foreground"
+                >
+                  <PanelLeftClose className="size-4" aria-hidden />
+                </Button>
+                <ThemeToggle />
+              </div>
             </div>
             <SidebarInner />
           </div>
@@ -302,8 +313,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             <img src="/logo.webp" alt="" className="size-6" />
             Eclipsay
           </Link>
+          <ThemeToggle className="ml-auto" />
         </header>
-        <main className="min-h-0 flex-1 overflow-y-auto">{children}</main>
+        <main id="main-content" tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto focus:outline-none">
+          {children}
+        </main>
       </div>
     </div>
   );

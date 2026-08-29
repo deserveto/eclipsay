@@ -9,7 +9,7 @@ export default async function ReflectSessionPage({ params }: { params: Promise<{
   const { sessionId } = await params;
   return (
     <Suspense>
-      <ChatScreen initialSessionId={sessionId} />
+      <ChatScreen key={sessionId} initialSessionId={sessionId} />
     </Suspense>
   );
 }

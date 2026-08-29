@@ -61,7 +61,7 @@ function RecommendationCard({
         <button
           type="button"
           disabled={acted}
-          className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
+          className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-[color-mix(in_oklch,var(--primary),var(--foreground)_8%)] disabled:opacity-60"
           onClick={() => begin(output.recommendedSpreadId!)}
         >
           {acted ? 'Reading started' : 'Begin reading'}
@@ -251,7 +251,9 @@ function SearchJournalCard({
           const brought = approvedEntryIds.has(hit.entryId);
           return (
             <div key={hit.entryId} className="flex items-center justify-between gap-2">
-              <span className="truncate text-sm text-muted-foreground">{hit.title}</span>
+              <span className="truncate text-sm text-muted-foreground" title={hit.title}>
+                {hit.title}
+              </span>
               {brought ? (
                 <span className="text-xs text-primary">Brought in</span>
               ) : (

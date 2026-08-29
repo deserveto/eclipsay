@@ -10,7 +10,7 @@ import { SignInDialog } from '@/components/auth/sign-in-dialog';
 import { useDataMode } from '@/hooks/use-data-mode';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import { clearGuestData, clearGuestHistory, loadGuestStore, saveGuestProfile } from '@/lib/guest/store';
-import type { Profile, ReflectionGoal, TarotFamiliarity } from '@/lib/types';
+import type { ReflectionGoal, TarotFamiliarity } from '@/lib/types';
 import { toast } from 'sonner';
 
 const GOALS: { value: ReflectionGoal; label: string }[] = [
@@ -30,12 +30,21 @@ const FAMILIARITY: { value: TarotFamiliarity; label: string }[] = [
 export function SettingsForm() {
   const { mode } = useDataMode();
   const [signInOpen, setSignInOpen] = useState(false);
-  const [profile, setProfile] = useState<Profile | null>(null);
   const [displayName, setDisplayName] = useState('');
   const [goal, setGoal] = useState<ReflectionGoal | ''>('');
   const [familiarity, setFamiliarity] = useState<TarotFamiliarity | ''>('');
   const [memoryEnabled, setMemoryEnabled] = useState(true);
   const [saved, setSaved] = useState(false);
+  // Guest profile read once per store event — loadGuestStore() parses the
+  // whole store on every call, so it must never run inside render.
+  const [guestGoal, setGuestGoal] = useState<ReflectionGoal | undefined>(undefined);
+  useEffect(() => {
+    if (mode !== 'guest') return;
+    const read = () => setGuestGoal(loadGuestStore().profile.reflectionGoal);
+    read();
+    window.addEventListener('eclipsay:guest-store-changed', read);
+    return () => window.removeEventListener('eclipsay:guest-store-changed', read);
+  }, [mode]);
 
   useEffect(() => {
     if (mode !== 'account' || !isSupabaseConfigured()) return;
@@ -47,7 +56,6 @@ export function SettingsForm() {
       .then(({ data }) => {
         const p = data?.[0];
         if (p) {
-          setProfile(p);
           setDisplayName(p.display_name ?? '');
           setGoal(p.reflection_goal ?? '');
           setFamiliarity(p.tarot_familiarity ?? '');
@@ -75,7 +83,6 @@ export function SettingsForm() {
       toast.error('Could not save your settings.');
       return;
     }
-    setProfile(row as Profile);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -200,7 +207,9 @@ export function SettingsForm() {
               </div>
               <Switch id="memory" checked={memoryEnabled} onCheckedChange={setMemoryEnabled} />
             </div>
-            <Button onClick={saveProfile}>{saved ? 'Saved' : 'Save changes'}</Button>
+            <div aria-live="polite">
+              <Button onClick={saveProfile}>{saved ? 'Saved' : 'Save changes'}</Button>
+            </div>
           </div>
         ) : (
           <div className="space-y-4">
@@ -209,9 +218,10 @@ export function SettingsForm() {
                 <button
                   key={g.value}
                   type="button"
+                  aria-pressed={guestGoal === g.value}
                   onClick={() => saveGuestProfile({ reflectionGoal: g.value })}
                   className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
-                    loadGuestStore().profile.reflectionGoal === g.value
+                    guestGoal === g.value
                       ? 'border-primary bg-primary/10 text-primary'
                       : 'border-border text-muted-foreground hover:bg-accent'
                   }`}
@@ -292,7 +302,6 @@ export function SettingsForm() {
       </section>
 
       <SignInDialog open={signInOpen} onOpenChange={setSignInOpen} />
-      {profile === null && mode === 'guest' ? null : null}
     </div>
   );
 }

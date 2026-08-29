@@ -96,7 +96,7 @@ export function DrawBar({
           </p>
           <button
             type="button"
-            className="text-xs text-white/70 underline underline-offset-4 hover:text-white"
+            className="rounded-md px-2 py-1 text-xs text-white/70 underline underline-offset-4 hover:text-white"
             onClick={onCancel}
           >
             Cancel
@@ -122,7 +122,9 @@ export function DrawBar({
                   />
                 )}
               </div>
-              <p className="mt-1 truncate text-[9px] uppercase tracking-wide opacity-75">{card.position}</p>
+              <p className="mt-1 truncate text-[9px] uppercase tracking-wide opacity-75" title={card.position}>
+                {card.position}
+              </p>
               {i < revealedCount && card.orientation === 'reversed' && (
                 <span className="mt-0.5 w-fit rounded border border-white/30 px-1 py-px text-[9px] uppercase opacity-80">
                   Reversed

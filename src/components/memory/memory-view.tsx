@@ -68,9 +68,17 @@ export function MemoryView() {
   };
 
   const forget = (id: string) => {
+    if (!window.confirm('Forget this memory? Eclipsay will no longer use it.')) return;
     if (mode === 'account' && isSupabaseConfigured()) {
       const supabase = createClient();
-      void supabase.from('memories').delete().eq('id', id).then(reload);
+      void supabase
+        .from('memories')
+        .delete()
+        .eq('id', id)
+        .then(({ error }) => {
+          if (error) toast.error('Could not forget the memory. Try again.');
+          reload();
+        });
       return;
     }
     deleteMemory(id);
@@ -82,11 +90,22 @@ export function MemoryView() {
     const updated = { ...memory, content: draft.trim(), updated_at: new Date().toISOString() };
     if (mode === 'account' && isSupabaseConfigured()) {
       const supabase = createClient();
-      void supabase.from('memories').update({ content: updated.content }).eq('id', memory.id).then(reload);
-    } else {
-      saveMemory(updated);
-      reload();
+      void supabase
+        .from('memories')
+        .update({ content: updated.content })
+        .eq('id', memory.id)
+        .then(({ error }) => {
+          if (error) {
+            toast.error('Could not save the edit. The card stays open — try again.');
+            return;
+          }
+          setEditingId(null);
+          reload();
+        });
+      return;
     }
+    saveMemory(updated);
+    reload();
     setEditingId(null);
   };
 
@@ -94,13 +113,22 @@ export function MemoryView() {
     setMemoryEnabled(enabled);
     if (mode === 'account' && isSupabaseConfigured()) {
       const supabase = createClient();
-      await supabase.from('profiles').update({ memory_enabled: enabled }).eq('id', (await supabase.auth.getUser()).data.user?.id ?? '');
-      toast(enabled ? 'Eclipsay will remember what you save.' : 'Eclipsay will stop using memories.');
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      const fail = () => {
+        setMemoryEnabled(!enabled);
+        toast.error('Could not update the memory setting. Try again.');
+      };
+      if (!user) return fail();
+      const { error } = await supabase.from('profiles').update({ memory_enabled: enabled }).eq('id', user.id);
+      if (error) return fail();
     } else {
-      // Guests persist locally (PRD §13); the toggle keeps the same promise (PRD §41).
+      // Guests persist locally (PRD §13, §41).
       saveGuestProfile({ memoryEnabled: enabled });
-      toast(enabled ? 'Eclipsay will remember what you save.' : 'Eclipsay will stop using memories.');
     }
+    // Success (or guest local persist — PRD §13/§41): confirm the new state.
+    toast(enabled ? 'Eclipsay will remember what you save.' : 'Eclipsay will stop using memories.');
   };
 
   const addManual = () => {
@@ -119,15 +147,23 @@ export function MemoryView() {
     if (mode === 'account' && isSupabaseConfigured()) {
       const supabase = createClient();
       void supabase.auth.getUser().then(async ({ data }) => {
-        if (!data.user) return;
-        await supabase.from('memories').insert({ ...memory, user_id: data.user.id });
+        if (!data.user) {
+          toast.error('Sign in to save memories to your account.');
+          return;
+        }
+        const { error } = await supabase.from('memories').insert({ ...memory, user_id: data.user.id });
+        if (error) {
+          toast.error('Could not save the memory. Your text is kept — try again.');
+          return;
+        }
+        setNewContent('');
         reload();
       });
     } else {
       saveMemory(memory);
       reload();
+      setNewContent('');
     }
-    setNewContent('');
   };
 
   return (

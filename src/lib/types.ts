@@ -137,8 +137,24 @@ export type MessageMeta = {
   // this reply (plan: Safety classifier).
   crisis?: boolean;
   readingRecommendation?: { recommendedSpreadId: SpreadId; context: string };
+  // Serialized static tool parts (ask_user, recommend_reading, confirm
+  // proposals, …) so tool UI cards survive hydration — without this a
+  // returned-to session loses every question chip and "Begin reading" card.
+  tools?: PersistedToolPart[];
+  // Propose-then-confirm state persisted on the assistant message that owns
+  // the parts, so acted/dismissed cards stay resolved across remounts.
+  actedToolCallIds?: string[];
+  declined?: boolean;
   [key: string]: unknown;
 };
+
+export type PersistedToolPart = {
+  type: string;
+  toolCallId: string;
+  state: string;
+  input?: unknown;
+  output?: unknown;
+ };
 
 export type ChatMessageRole = 'user' | 'assistant';
 

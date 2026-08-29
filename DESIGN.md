@@ -30,6 +30,8 @@ colors:
   mystical-cardback-glow-a: "oklch(0.5 0.07 285 / 0.5)"
   mystical-cardback-glow-b: "oklch(0.42 0.06 260 / 0.5)"
   mystical-cardback-base: "oklch(0.3 0.045 275)"
+  scrollbar-pill: "oklch(0.85 0.015 80)"
+  scrollbar-pill-hover: "oklch(0.76 0.02 75)"
 typography:
   display:
     fontFamily: "Geist, ui-sans-serif, system-ui, sans-serif"
@@ -61,6 +63,19 @@ typography:
     fontFamily: "Geist, ui-sans-serif, system-ui, sans-serif"
     fontSize: "0.6875rem"
     fontWeight: 500
+    lineHeight: 1.2
+  micro-badge:
+    fontFamily: "Geist, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "9px"
+    fontWeight: 500
+  micro-tarot:
+    fontFamily: "Geist, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "10px"
+    fontWeight: 500
+  code-inline:
+    fontFamily: "Geist Mono, ui-monospace, monospace"
+    fontSize: "13px"
+    fontWeight: 400
     lineHeight: 1.2
 rounded:
   sm: "6px"
@@ -140,7 +155,7 @@ Eclipsay is a warm, paper-lit room for thinking. Every surface sits in one tight
 
 Depth comes from light, not shadow: surfaces separate by 1px hairline rings, fields differentiate by tone, and a box-shadow must be earned by physicality (a tarot card) or overlay (a modal). One muted copper voice speaks at a time — primary actions, active tints, links, and the live "Reflecting…" pulse — and its scarcity is what makes it audible. When tarot enters, the study dims: a scoped indigo atmosphere (`.mystical`) with veiled radial glows takes over only inside tarot surfaces, and the base app never borrows it.
 
-The system is a single light world — no dark theme is defined — and one type family, Geist, carries everything from the 48px landing headline down to 10px mystical micro-labels.
+The system is one warm world in two appearances — "Lamplit Study by Day / After Hours": by day, the light palette below; after hours, a `.dark` override whose base is warm neutral charcoal with the same scarce copper accent — never blue, purple, pure black, or high-contrast neon. One type family, Geist, carries everything from the 48px landing headline down to 10px mystical micro-labels.
 
 **Key Characteristics:**
 - One warm monochrome (hue 80–85) + a single muted copper accent
@@ -178,10 +193,48 @@ A warm monochrome with one voice: everything except copper and the tarot indigo 
 - **Card-back Base** (`oklch(0.3 0.045 275)` → `oklch(0.22 0.035 268)`): The 160° gradient behind card backs.
 - **Low Veil** (`oklch(0.35 0.05 265 / 0.35)`): The `.mystical` panel's lower-corner radial glow.
 
+### Dark neutral
+
+After hours, the same warm family dims to charcoal: warm neutral surfaces, warm ink inverted to moonpaper text, and the identical scarce copper voice (brightened for low light). The dark base is never blue, purple, pure black, or high-contrast neon, and the indigo tarot atmosphere stays exclusive to tarot. These are the `.dark` token overrides in `src/app/globals.css`:
+
+| Token | Dark value |
+|---|---|
+| `--background` | `oklch(0.18 0.012 70)` |
+| `--foreground` | `oklch(0.92 0.012 85)` |
+| `--card`, `--popover` | `oklch(0.22 0.014 75)` |
+| `--card-foreground`, `--popover-foreground` | `oklch(0.92 0.012 85)` |
+| `--primary` | `oklch(0.68 0.09 55)` |
+| `--primary-foreground` | `oklch(0.18 0.012 70)` |
+| `--secondary` | `oklch(0.27 0.014 75)` |
+| `--secondary-foreground` | `oklch(0.9 0.012 85)` |
+| `--muted` | `oklch(0.25 0.012 75)` |
+| `--muted-foreground` | `oklch(0.7 0.018 80)` |
+| `--accent` | `oklch(0.29 0.025 70)` |
+| `--accent-foreground` | `oklch(0.92 0.012 85)` |
+| `--destructive` | `oklch(0.68 0.18 27.325)` |
+| `--border` | `oklch(0.32 0.014 75)` |
+| `--input` | `oklch(0.34 0.014 75)` |
+| `--ring` | `oklch(0.72 0.075 60)` |
+| `--chart-1` | `oklch(0.68 0.09 55)` |
+| `--chart-2` | `oklch(0.7 0.07 130)` |
+| `--chart-3` | `oklch(0.7 0.07 260)` |
+| `--chart-4` | `oklch(0.76 0.1 80)` |
+| `--chart-5` | `oklch(0.65 0.08 300)` |
+| `--sidebar` | `oklch(0.16 0.012 70)` |
+| `--sidebar-foreground` | `oklch(0.9 0.012 85)` |
+| `--sidebar-primary` | `oklch(0.68 0.09 55)` |
+| `--sidebar-primary-foreground` | `oklch(0.18 0.012 70)` |
+| `--sidebar-accent` | `oklch(0.25 0.02 70)` |
+| `--sidebar-accent-foreground` | `oklch(0.92 0.012 85)` |
+| `--sidebar-border` | `oklch(0.29 0.014 75)` |
+| `--sidebar-ring` | `oklch(0.72 0.075 60)` |
+| `--scrollbar-pill` | `oklch(0.42 0.018 75)` |
+| `--scrollbar-pill-hover` | `oklch(0.52 0.02 75)` |
+
 ### Named Rules
 **The One Voice Rule.** Muted Copper appears on ≤10% of any screen — primary action, active tint, link, pulse. Its rarity is the point; a second copper element within one glance dilutes both.
 
-**The Tarot Owns the Night Rule.** The indigo mystical atmosphere (`.mystical`, `.mystical-card-back`, `.mystical-ring`) may appear only inside tarot surfaces. The base application is a daylight room and never borrows the night (PRD §67).
+**The Tarot Owns Indigo Rule.** The indigo mystical atmosphere (`.mystical`, `.mystical-card-back`, `.mystical-ring`) may appear only inside tarot surfaces — even when the surrounding app is dark, the After Hours base stays warm-neutral charcoal and never borrows the indigo (PRD §67).
 
 ## Typography
 
@@ -227,7 +280,7 @@ A gentle, consistent radius ladder scales from a 10px base (`--radius: 0.625rem`
 
 ### Buttons
 Compact and precise: 32px tall (24/28/36px steps for `xs`/`sm`/`lg` and icon variants), 10px radius, 14px/500 text, 1.5px icon gap, press sinks 1px (`translate-y-px`), focus is a 3px copper ring at 50% + copper border.
-- **Primary:** Muted Copper fill, Warm Paper text, hover drops to 80% opacity.
+- **Primary:** Muted Copper fill, Warm Paper text, hover darkens 8% toward Warm Ink (`color-mix(in oklch, var(--primary), var(--foreground) 8%)`, 5.5:1) — never opacity, which would drop the fill under AA contrast.
 - **Ghost:** Transparent, hover fills Candle Glow/Oat wash.
 - **Outline:** 1px Clay Path on Warm Paper, hover wash.
 - **Destructive:** Soft — 10% Ember wash, Ember text (20%/30% hover); never a solid red fill.
@@ -260,13 +313,13 @@ Full-screen `black/50` scrim; centered mystical panel (`max-w-lg`, 18px radius, 
 - **Do** keep all standard controls at 32px height with 10px radius; use the 24/28/36px steps only for dense/icon contexts.
 - **Do** separate surfaces with hairline rings (ink at 10%) or tone steps; reserve `shadow-lg`/`shadow-2xl` for tarot cards and overlays.
 - **Do** restrict copper to primary actions, active tints, links, and the live pulse — one voice per glance.
-- **Do** scope `.mystical` classes to tarot surfaces only; the base app stays in the daylight palette.
+- **Do** scope `.mystical` classes to tarot surfaces only; the base app stays warm — Lamplit paper by day, warm-neutral charcoal after hours.
 - **Do** pair every reversed card with its uppercase text badge, and set card alt text to `"<name>, <orientation>"`.
 - **Do** make every animation resolve instantly under `prefers-reduced-motion` (ceremony ceiling: 150ms).
 - **Do** set destructive states as a 10% Ember wash with Ember text, behind `window.confirm` for destructive actions.
 
 ### Don't:
-- **Don't** introduce a dark theme — the tokens define a single light world; no `.dark` block exists.
+- **Don't** turn the dark theme blue, purple, pure black, or high-contrast neon; it remains a warm-neutral Lamplit Study.
 - **Don't** add resting shadows to base cards, inputs, or buttons; hover lifts with translate, not cast shadows.
 - **Don't** decorate with gold borders, stars, gothic typography, or purple gradients — the indigo world belongs to tarot alone (PRD §67).
 - **Don't** add a second accent hue; Ember is a danger state, not a palette member.

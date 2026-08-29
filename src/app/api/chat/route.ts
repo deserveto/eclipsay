@@ -13,7 +13,7 @@ import { buildSystemPrompt, type MemoryForPrompt } from '@/lib/ai/system-prompt'
 import { classify } from '@/lib/ai/safety';
 import { createTarotTools } from '@/lib/ai/tools';
 import { createClient, getAuthUser, isSupabaseServerConfigured } from '@/lib/supabase/server';
-import type { MessageMeta, Profile, SpreadId } from '@/lib/types';
+import type { MessageMeta, PersistedToolPart, Profile, SpreadId } from '@/lib/types';
 
 export const maxDuration = 60;
 
@@ -178,10 +178,19 @@ export async function POST(request: Request) {
           // without re-classifying (plan: Safety classifier).
           ...(safety.crisis ? { crisis: true } : {}),
         };
+        // Serialize every static tool part so question chips, recommendation
+        // cards, and confirm proposals re-render on hydration (PRD §62).
+        const tools: PersistedToolPart[] = [];
         for (const message of responseMessages) {
           const content = typeof message.content === 'string' ? [] : message.content;
           for (const part of content) {
             if (part.type !== 'tool-result') continue;
+            tools.push({
+              type: `tool-${part.toolName}`,
+              toolCallId: part.toolCallId,
+              state: 'output-available',
+              output: part.output,
+            });
             const output = part.output as Record<string, unknown> | undefined;
             if (part.toolName === 'recommend_reading' && output?.recommendedSpreadId) {
               meta.readingRecommendation = {
@@ -198,6 +207,7 @@ export async function POST(request: Request) {
             }
           }
         }
+        if (tools.length > 0) meta.tools = tools;
         await supabase.from('messages').insert({
           session_id: sid,
           user_id: userId,
