@@ -47,6 +47,11 @@ typography:
     fontSize: "0.875rem"
     fontWeight: 400
     lineHeight: 1.45
+  reading:
+    fontFamily: "Geist, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "0.9375rem"
+    fontWeight: 400
+    lineHeight: 1.75
   label:
     fontFamily: "Geist, ui-sans-serif, system-ui, sans-serif"
     fontSize: "0.75rem"
@@ -192,7 +197,7 @@ A warm monochrome with one voice: everything except copper and the tarot indigo 
 - **Body** (400, 14px, line-height 1.45): The default for everything — chat, descriptions, nav labels, buttons (buttons add weight 500). 14px is the base size, not 16px.
 - **Label** (500, 12px, tracking +2.5%): Badges, micro-buttons; uppercase + wide tracking is reserved for the wordmark "ECLIPSAY" and spread titles.
 - **Micro** (500, 11px, line-height 1.2): Tarot panel position and card names; the 9–10px uppercase "Reversed" badge and clarify buttons live at the floor of the scale.
-- **Chat Reading** (400, 15px, line-height ~1.75): User bubbles and rendered assistant prose, plus 13px inline code — a deliberate legibility step above Body for long reflective reading (age 13+); the only sanctioned use above 14px in-app.
+- **Chat Reading** (400, 15px, line-height ~1.75): User bubbles, rendered assistant prose, and card meanings on Explore detail pages (traditional meaning, reflection, themes), plus 13px inline code — a deliberate legibility step above Body for long reflective reading (age 13+); the only sanctioned use above 14px in-app.
 
 ### Named Rules
 **The Whispering Wordmark Rule.** The brand name is set small — 14px, wide tracking, copper — never as a monument. The room is the brand; the wordmark is a nameplate.

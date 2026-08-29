@@ -79,15 +79,40 @@ export function ExploreView() {
       {tab === 'spreads' && (
         <div className="grid gap-3 sm:grid-cols-2">
           {SPREADS.map((spread) => (
-            <div key={spread.id} className="rounded-xl border border-border bg-card px-4 py-3">
-              <h2 className="text-sm font-medium tracking-wide uppercase">{spread.title}</h2>
-              <ol className="mt-2 space-y-0.5 text-sm">
+            <div
+              key={spread.id}
+              className="flex gap-4 rounded-xl border border-foreground/10 bg-card p-4 transition-colors hover:border-foreground/20"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex items-start justify-between gap-2">
+                  <h2 className="text-[0.9375rem] font-medium leading-snug">{spread.title}</h2>
+                  <span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-[0.6875rem] font-medium text-secondary-foreground">
+                    {spread.positions.length} {spread.positions.length === 1 ? 'card' : 'cards'}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">{spread.description}</p>
+                <ol className="mt-3 space-y-1">
+                  {spread.positions.map((position, i) => (
+                    <li key={position} className="flex items-baseline gap-2 text-sm leading-5">
+                      <span className="text-[0.6875rem] font-medium tabular-nums text-muted-foreground">{i + 1}</span>
+                      {position}
+                    </li>
+                  ))}
+                </ol>
+              </div>
+              <div
+                className="hidden shrink-0 flex-wrap items-start justify-end gap-1.5 sm:flex"
+                aria-hidden
+              >
                 {spread.positions.map((position, i) => (
-                  <li key={position}>
-                    {i + 1}. {position}
-                  </li>
+                  <div
+                    key={position}
+                    className="grid h-[54px] w-[36px] place-items-center rounded-[5px] border border-foreground/15 bg-secondary text-[0.6875rem] font-medium tabular-nums text-muted-foreground"
+                  >
+                    {i + 1}
+                  </div>
                 ))}
-              </ol>
+              </div>
             </div>
           ))}
         </div>
