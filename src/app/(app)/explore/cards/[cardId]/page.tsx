@@ -15,6 +15,15 @@ export function generateStaticParams() {
   return ALL_CARDS.map((card) => ({ cardId: card.id }));
 }
 
+export async function generateMetadata({ params }: { params: Promise<{ cardId: string }> }) {
+  const { cardId } = await params;
+  try {
+    return { title: getCard(cardId).name };
+  } catch {
+    return { title: 'Card' };
+  }
+}
+
 // Card detail page (PRD §49): all content from the static dataset.
 export default async function CardDetailPage({ params }: { params: Promise<{ cardId: string }> }) {
   const { cardId } = await params;
@@ -74,7 +83,7 @@ export default async function CardDetailPage({ params }: { params: Promise<{ car
           <p>{card.themes.growth}</p>
         </div>
       </div>
-      <p className="text-[11px] text-muted-foreground">Illustration: Pamela Colman Smith (1909), public domain.</p>
+      <p className="text-xs text-muted-foreground">Illustration: Pamela Colman Smith (1909), public domain.</p>
     </div>
   );
 }

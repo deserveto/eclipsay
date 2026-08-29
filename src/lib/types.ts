@@ -104,12 +104,6 @@ export type TarotReading = {
 
 // ── Message meta (tool events persisted into messages.meta) ───────────
 
-export type SpreadOption = {
-  spreadId: SpreadId;
-  title: string;
-  positions: string[];
-};
-
 export type ConfirmCard =
   | { kind: 'insight'; insightId: string; text: string; status: 'pending' | 'saved' | 'dismissed' }
   | {
@@ -139,6 +133,10 @@ export type MessageMeta = {
   confirm?: ConfirmCard;
   contextChips?: ContextChip[];
   drawFailed?: boolean;
+  // Set only when the safety classifier flagged the user message that prompted
+  // this reply (plan: Safety classifier).
+  crisis?: boolean;
+  readingRecommendation?: { recommendedSpreadId: SpreadId; context: string };
   [key: string]: unknown;
 };
 

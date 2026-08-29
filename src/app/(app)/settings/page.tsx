@@ -1,4 +1,3 @@
-import { AppShell } from '@/components/app-shell';
 import { SettingsForm } from '@/components/settings/settings-form';
 
 export const metadata = {
@@ -6,9 +5,5 @@ export const metadata = {
 };
 
 export default function SettingsPage() {
-  return (
-    <AppShell>
-      <SettingsForm />
-    </AppShell>
-  );
+  return <SettingsForm />;
 }

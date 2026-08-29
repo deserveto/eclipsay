@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { useDataMode } from '@/hooks/use-data-mode';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
-import { deleteMemory, loadGuestStore, saveMemory } from '@/lib/guest/store';
+import { deleteMemory, loadGuestStore, saveGuestProfile, saveMemory } from '@/lib/guest/store';
 import type { Memory } from '@/lib/types';
 import { toast } from 'sonner';
 
@@ -26,7 +26,7 @@ function fmtDate(iso: string): string {
 }
 
 // Memory management (PRD §41, §42): explicit, editable, forgettable.
-export default function MemoryPage() {
+export function MemoryView() {
   const { mode } = useDataMode();
   const [memories, setMemories] = useState<Memory[] | null>(null);
   const [memoryEnabled, setMemoryEnabled] = useState(true);
@@ -49,7 +49,9 @@ export default function MemoryPage() {
       })();
       return;
     }
-    setMemories(loadGuestStore().memories);
+    const guestStore = loadGuestStore();
+    setMemories(guestStore.memories);
+    setMemoryEnabled(guestStore.profile.memoryEnabled);
   }, [mode]);
 
   const reload = () => {
@@ -94,6 +96,10 @@ export default function MemoryPage() {
       const supabase = createClient();
       await supabase.from('profiles').update({ memory_enabled: enabled }).eq('id', (await supabase.auth.getUser()).data.user?.id ?? '');
       toast(enabled ? 'Eclipsay will remember what you save.' : 'Eclipsay will stop using memories.');
+    } else {
+      // Guests persist locally (PRD §13); the toggle keeps the same promise (PRD §41).
+      saveGuestProfile({ memoryEnabled: enabled });
+      toast(enabled ? 'Eclipsay will remember what you save.' : 'Eclipsay will stop using memories.');
     }
   };
 
@@ -134,14 +140,12 @@ export default function MemoryPage() {
         </p>
       </header>
 
-      {mode === 'account' && (
-        <div className="flex items-center justify-between rounded-lg border border-border px-3.5 py-3">
-          <Label htmlFor="master" className="text-sm font-normal">
-            Let Eclipsay remember
-          </Label>
-          <Switch id="master" checked={memoryEnabled} onCheckedChange={(v) => void toggleMaster(v)} />
-        </div>
-      )}
+      <div className="flex items-center justify-between rounded-lg border border-border px-3.5 py-3">
+        <Label htmlFor="master" className="text-sm font-normal">
+          Let Eclipsay remember
+        </Label>
+        <Switch id="master" checked={memoryEnabled} onCheckedChange={(v) => void toggleMaster(v)} />
+      </div>
 
       <div className="flex flex-col gap-2 sm:flex-row">
         <Input

@@ -1,9 +1,6 @@
 'use client';
 
-import { useState } from 'react';
 import type { ToolUIPart } from 'ai';
-import { SPREADS } from '@/lib/tarot/spreads';
-import type { SpreadOption } from '@/lib/types';
 import type { ChatMessage } from '@/lib/chat/convert';
 import { DrawFailedCard } from '@/components/tarot/tarot-spread';
 export type SearchHit = { entryId: string; title: string; createdAt?: string };
@@ -16,80 +13,130 @@ type ConfirmHandlers = {
   actedIds: Set<string>;
   approvedEntryIds: Set<string>;
 };
+
 // Typed renderers for streamed tool parts (plan: Phase 2.7 / Phase 3).
 // The reading panel itself renders from the session readings store, keyed by
 // readingId — these parts only carry interaction affordances.
 
-const SPREAD_CHOICES: SpreadOption[] = SPREADS.map((s) => ({
-  spreadId: s.id,
-  title: s.title,
-  positions: s.positions,
-}));
-
-function SpreadSuggestionCard({
+function RecommendationCard({
   part,
-  onPickSpread,
-  onDeclineSpread,
   declined,
+  acted,
+  onBeginReading,
+  onDecline,
+  markActed,
 }: {
   part: ToolUIPart;
-  onPickSpread: (spreadId: string, mode: 'quick' | 'interactive') => void;
-  onDeclineSpread: () => void;
   declined: boolean;
+  acted: boolean;
+  onBeginReading: (spreadId: string) => void;
+  onDecline: () => void;
+  markActed: (toolCallId: string) => void;
 }) {
-  const [showAll, setShowAll] = useState(false);
   if (part.state !== 'output-available' || declined) return null;
-  const output = part.output as { options?: SpreadOption[] } | undefined;
-  const options = output?.options ?? [];
-  if (options.length === 0) return null;
-
-  const extras = SPREAD_CHOICES.filter((s) => !options.some((o) => o.spreadId === s.spreadId));
-  const listed = showAll ? [...options, ...extras] : options;
+  const output = part.output as
+    | {
+        error?: string;
+        context?: string;
+        recommendedSpreadId?: string;
+        title?: string;
+        positions?: string[];
+        cardCount?: number;
+        alternatives?: { spreadId: string; title: string; cardCount: number }[];
+      }
+    | undefined;
+  if (!output?.recommendedSpreadId || !output.title || output.error) return null;
+  const begin = (spreadId: string) => {
+    markActed(part.toolCallId);
+    onBeginReading(spreadId);
+  };
   return (
     <div className="rounded-xl border border-border bg-card px-4 py-3">
-      <p className="text-sm">Shall we explore this with a few cards?</p>
-      <div className="mt-2.5 flex flex-wrap gap-2">
-        {listed.map((option) => (
-          <div key={option.spreadId} className="flex flex-col items-start gap-1">
-            <button
-              type="button"
-              className="rounded-lg bg-primary px-3 py-1.5 text-sm text-primary-foreground transition-opacity hover:opacity-90"
-              onClick={() => onPickSpread(option.spreadId, 'quick')}
-            >
-              Reflect with cards{listed.length > 1 ? ` — ${option.title}` : ''}
-            </button>
-            {showAll && <span className="text-[11px] text-muted-foreground">{option.positions.join(' · ')}</span>}
-          </div>
-        ))}
-      </div>
-      <div className="mt-2.5 flex flex-wrap gap-3 text-xs text-muted-foreground">
-        <button type="button" className="underline underline-offset-4 hover:text-foreground" onClick={() => setShowAll((v) => !v)}>
-          {showAll ? 'Hide other spreads' : 'Choose another spread'}
-        </button>
+      <p className="text-xs font-medium tracking-wide text-primary uppercase">Reading suggestion</p>
+      <p className="mt-1 text-sm leading-6">{output.context}</p>
+      <p className="mt-0.5 text-xs text-muted-foreground">
+        A {output.cardCount}-card {output.title} — {output.positions?.join(' · ')}
+      </p>
+      <div className="mt-2.5 flex flex-wrap items-center gap-2">
         <button
           type="button"
-          className="underline underline-offset-4 hover:text-foreground"
-          onClick={() => onPickSpread(options[0].spreadId, 'interactive')}
+          disabled={acted}
+          className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
+          onClick={() => begin(output.recommendedSpreadId!)}
         >
-          Draw them myself
+          {acted ? 'Reading started' : 'Begin reading'}
         </button>
-        <button type="button" className="underline underline-offset-4 hover:text-foreground" onClick={onDeclineSpread}>
-          Keep talking
-        </button>
+        {!acted &&
+          (output.alternatives ?? []).map((alt) => (
+            <button
+              key={alt.spreadId}
+              type="button"
+              className="rounded-full bg-secondary px-3 py-1.5 text-xs transition-opacity hover:opacity-90"
+              onClick={() => begin(alt.spreadId)}
+            >
+              {alt.cardCount} {alt.cardCount === 1 ? 'card' : 'cards'} — {alt.title}
+            </button>
+          ))}
+        {!acted && (
+          <button
+            type="button"
+            className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+            onClick={onDecline}
+          >
+            Not now
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
-function DrawResultPart({ part, onRetryDraw }: { part: ToolUIPart; onRetryDraw: () => void }) {
+function AskUserCard({
+  part,
+  acted,
+  onAnswer,
+  markActed,
+}: {
+  part: ToolUIPart;
+  acted: boolean;
+  onAnswer: (text: string) => void;
+  markActed: (toolCallId: string) => void;
+}) {
   if (part.state !== 'output-available') {
-    return <p className="text-sm text-muted-foreground">Shuffling the deck…</p>;
+    return <p className="text-sm text-muted-foreground">Thinking it through…</p>;
   }
-  const output = part.output as { error?: string } | undefined;
-  if (output?.error) {
-    return <DrawFailedCard onRetry={onRetryDraw} />;
-  }
-  return null; // Panel renders from the readings store, keyed by readingId.
+  const output = part.output as { question?: string; options?: string[] } | undefined;
+  if (!output?.question) return null;
+  const answer = (text: string) => {
+    markActed(part.toolCallId);
+    onAnswer(text);
+  };
+  return (
+    <div className="rounded-xl border border-border bg-card px-4 py-3">
+      <p className="text-[15px] leading-7">{output.question}</p>
+      <div className="mt-2.5 flex flex-wrap gap-2">
+        {(output.options ?? []).map((option) => (
+          <button
+            key={option}
+            type="button"
+            disabled={acted}
+            className="rounded-full border border-border bg-card px-3 py-1.5 text-sm transition-colors hover:border-primary/40 hover:bg-primary/10 disabled:opacity-50"
+            onClick={() => answer(option)}
+          >
+            {option}
+          </button>
+        ))}
+        <button
+          type="button"
+          disabled={acted}
+          className="rounded-full border border-border px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50"
+          onClick={() => answer("I'd rather not say")}
+        >
+          I&apos;d rather not say
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function ClarifyResultPart({ part }: { part: ToolUIPart }) {
@@ -107,6 +154,7 @@ function ClarifyResultPart({ part }: { part: ToolUIPart }) {
     </p>
   );
 }
+
 function InsightConfirmCard({
   part,
   onSaveInsight,
@@ -223,20 +271,19 @@ function SearchJournalCard({
   );
 }
 
-
 export function ToolPartRenderer({
   message,
   declined,
-  onPickSpread,
-  onDeclineSpread,
-  onRetryDraw,
+  onBeginReading,
+  onDecline,
+  onAnswerClarify,
   confirm,
 }: {
   message: ChatMessage;
   declined: boolean;
-  onPickSpread: (spreadId: string, mode: 'quick' | 'interactive') => void;
-  onDeclineSpread: () => void;
-  onRetryDraw: () => void;
+  onBeginReading: (spreadId: string) => void;
+  onDecline: () => void;
+  onAnswerClarify: (text: string) => void;
   confirm: ConfirmHandlers;
 }) {
   return (
@@ -245,18 +292,28 @@ export function ToolPartRenderer({
         .filter((part): part is ToolUIPart => part.type.startsWith('tool-'))
         .map((part) => {
           switch (part.type) {
-            case 'tool-suggest_spread':
+            case 'tool-ask_user':
               return (
-                <SpreadSuggestionCard
+                <AskUserCard
+                  key={part.toolCallId}
+                  part={part}
+                  acted={confirm.actedIds.has(part.toolCallId)}
+                  onAnswer={onAnswerClarify}
+                  markActed={confirm.markActed}
+                />
+              );
+            case 'tool-recommend_reading':
+              return (
+                <RecommendationCard
                   key={part.toolCallId}
                   part={part}
                   declined={declined}
-                  onPickSpread={onPickSpread}
-                  onDeclineSpread={onDeclineSpread}
+                  acted={confirm.actedIds.has(part.toolCallId)}
+                  onBeginReading={onBeginReading}
+                  onDecline={onDecline}
+                  markActed={confirm.markActed}
                 />
               );
-            case 'tool-draw_tarot_cards':
-              return <DrawResultPart key={part.toolCallId} part={part} onRetryDraw={onRetryDraw} />;
             case 'tool-request_clarification':
               return <ClarifyResultPart key={part.toolCallId} part={part} />;
             case 'tool-propose_insight':

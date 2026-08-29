@@ -869,7 +869,7 @@ Choose cards
 Reveal
 ```
 
-The interaction should remain optional.
+The interaction should remain optional. In the current build the Interactive Draw is a docked bar at the bottom of the conversation (no separate picker dialog); Quick Draw remains only as the retry path when an automated draw fails.
 
 ---
 
@@ -904,7 +904,7 @@ Accessibility settings should respect reduced-motion preferences.
 
 # 30. Tarot Suggestions
 
-The AI may suggest a spread based on conversation context.
+The AI recommends a spread sized by the complexity of what the user is exploring.
 
 Example:
 
@@ -912,7 +912,7 @@ User:
 
 > “I don't know whether to quit my job.”
 
-AI may suggest:
+AI may recommend:
 
 ### Decision Reflection
 
@@ -922,13 +922,15 @@ AI may suggest:
 4. What I may be overlooking
 5. What deserves my attention
 
-User can:
+The recommendation renders as a one-click confirmation card; the user can:
 
-- use suggested spread;
-- continue talking;
-- choose another spread.
+- confirm the recommendation (one click on "Begin reading");
+- pick an alternate spread of a different card count;
+- decline ("Not now").
 
-The AI should not continuously push tarot when the user declines.
+The app draws the cards in its docked Interactive Draw bar — the AI never draws cards itself. After the reveal, the AI interprets the drawn cards.
+
+The AI should not re-recommend tarot after a decline unless the user asks for cards again.
 
 ---
 
@@ -1586,13 +1588,15 @@ The AI should conceptually have explicit product tools rather than simulating ac
 Examples:
 
 ```text
-draw_tarot_cards()
-suggest_spread()
+recommend_reading()
+ask_user()
 save_insight()
 search_memory()
 suggest_journal_context()
 create_followup()
 ```
+
+Draws are app-initiated via the draw service — the model never draws cards.
 
 The LLM decides when a tool might help.
 
@@ -1963,7 +1967,7 @@ The MVP is considered functionally complete when a new user can:
 3. Start a reflection conversation.
 4. Continue entirely without tarot.
 5. Receive an optional contextual tarot suggestion.
-6. Choose a spread.
+6. Confirm the AI-recommended reading (or pick another size).
 7. Draw cards through the Tarot Engine.
 8. Visually reveal cards.
 9. Receive context-aware AI interpretation.

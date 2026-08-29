@@ -15,7 +15,7 @@ const FILTERS = [
 ] as const;
 
 // Card + spread libraries (PRD §48, §31). Guest-accessible.
-export default function ExplorePage() {
+export function ExploreView() {
   const [filter, setFilter] = useState<(typeof FILTERS)[number]['value']>('all');
   const [tab, setTab] = useState<'cards' | 'spreads'>('cards');
 
@@ -80,12 +80,11 @@ export default function ExplorePage() {
         <div className="grid gap-3 sm:grid-cols-2">
           {SPREADS.map((spread) => (
             <div key={spread.id} className="rounded-xl border border-border bg-card px-4 py-3">
-              <p className="text-sm font-medium">{spread.title}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{spread.description}</p>
+              <h2 className="text-sm font-medium tracking-wide uppercase">{spread.title}</h2>
               <ol className="mt-2 space-y-0.5 text-sm">
                 {spread.positions.map((position, i) => (
                   <li key={position}>
-                    <span className="text-muted-foreground">{i + 1}.</span> {position}
+                    {i + 1}. {position}
                   </li>
                 ))}
               </ol>
@@ -94,7 +93,7 @@ export default function ExplorePage() {
         </div>
       )}
 
-      <p className="pt-2 text-[11px] text-muted-foreground">
+      <p className="pt-2 text-xs text-muted-foreground">
         Illustrations: Pamela Colman Smith (1909), public domain.
       </p>
     </div>

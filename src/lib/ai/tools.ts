@@ -2,51 +2,84 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import type { User } from '@supabase/supabase-js';
 import { SPREADS, getSpread } from '@/lib/tarot/spreads';
-import { drawReading, clarifyReading } from '@/lib/tarot/draw-service';
+import { clarifyReading } from '@/lib/tarot/draw-service';
+import { createClient } from '@/lib/supabase/server';
 
-// Tarot tools (plan: AI layer — Tools; PRD §62). The model may call these to
-// suggest spreads, draw, or clarify; effects on long-term data go through
-// propose-then-confirm UI cards (later phases). The engine is the only source
-// of card identities and orientations.
+// Tarot tools (plan: AI layer — Tools; PRD §62). The model may ask structured
+// clarifying questions, recommend a reading, and clarify a drawn card; it
+// NEVER draws — all draws go through the draw service via POST /api/tarot/draw,
+// so every persisted reading carries the engine's real seed (PRD §25–§26).
+// Effects on long-term data go through propose-then-confirm UI cards.
 
-function pickSpreads(context: string) {
+export const ALL_SPREAD_IDS = SPREADS.map((s) => s.id);
+
+// Deterministic alternate priority (plan: tools). Keyword heuristics only
+// reorder this list; the MODEL picks spreadId, pickReading supplies display
+// data + card-count-diverse alternates.
+const ALT_PRIORITY = ['one_card', 'decision_reflection', 'three_reflection', 'past_present_future'];
+
+export type ReadingAlternative = { spreadId: string; title: string; cardCount: number };
+
+export type ReadingRecommendation = {
+  recommendedSpreadId: string;
+  title: string;
+  positions: string[];
+  cardCount: number;
+  alternatives: ReadingAlternative[];
+};
+
+export function pickReading(context: string, chosenId: string): ReadingRecommendation {
+  const chosen = getSpread(chosenId) ?? getSpread('three_reflection')!;
   const text = context.toLowerCase();
   const decisionish = /(decision|decide|choose|choice|option|quit|stay|leave|whether)/.test(text);
-  const relationshipish = /(relationship|partner|partner|ex|dating|marriage|friend|family|love|them)/.test(text);
-  if (decisionish) return ['decision_reflection', 'three_reflection'];
-  if (relationshipish) return ['relationship_reflection', 'three_reflection'];
-  return ['three_reflection', 'one_card'];
+  const relationshipish = /(relationship|partner|ex|dating|marriage|friend|family|love|them)/.test(text);
+  const priority = [...ALT_PRIORITY];
+  if (relationshipish) priority.unshift('relationship_reflection');
+  if (decisionish) priority.unshift(...priority.splice(priority.indexOf('decision_reflection'), 1));
+
+  const seenCounts = new Set([chosen.positions.length]);
+  const alternatives: ReadingAlternative[] = [];
+  for (const id of [...priority, ...SPREADS.map((s) => s.id)]) {
+    if (alternatives.length >= 2) break;
+    if (id === chosen.id) continue;
+    const spread = getSpread(id);
+    if (!spread || seenCounts.has(spread.positions.length)) continue;
+    seenCounts.add(spread.positions.length);
+    alternatives.push({ spreadId: spread.id, title: spread.title, cardCount: spread.positions.length });
+  }
+  return {
+    recommendedSpreadId: chosen.id,
+    title: chosen.title,
+    positions: chosen.positions,
+    cardCount: chosen.positions.length,
+    alternatives,
+  };
 }
 
-export function createTarotTools({ user, sessionId }: { user: User | null; sessionId?: string }) {
+export function createTarotTools({ user }: { user: User | null }) {
   return {
-    suggest_spread: tool({
+    ask_user: tool({
       description:
-        'Suggest one or two tarot spreads that fit what the user is exploring. Suggest at most once per conversation, and never again after the user declines.',
+        'Ask the user one clarifying multiple-choice question before a reading. Use when their question is too vague to choose a spread; at most twice per reading.',
       inputSchema: z.object({
-        context: z.string().max(500).describe('Short summary of what the user is exploring'),
+        question: z.string().min(5).max(200),
+        options: z.array(z.string().min(1).max(80)).min(2).max(4),
       }),
-      execute: async ({ context }) => {
-        const options = pickSpreads(context)
-          .map((id) => getSpread(id))
-          .filter((s): s is NonNullable<typeof s> => Boolean(s))
-          .map((s) => ({ spreadId: s.id, title: s.title, positions: s.positions }));
-        return { options };
-      },
+      // Pure payload, PRD §62: the UI renders it; nothing is written here.
+      execute: async ({ question, options }) => ({ question, options }),
     }),
 
-    draw_tarot_cards: tool({
+    recommend_reading: tool({
       description:
-        'Draw cards for a spread using the Tarot Engine. Interpret ONLY the returned cards, then ask exactly one reflection question.',
+        'Recommend a tarot reading once the question is clear. The app draws the cards; interpret them only after the [Cards drawn] message arrives.',
       inputSchema: z.object({
-        spreadId: z.string().describe('Spread id, e.g. three_reflection or decision_reflection'),
+        context: z.string().min(1).max(300).describe("What this reading should illuminate, in the user's terms"),
+        spreadId: z.enum(ALL_SPREAD_IDS as [string, ...string[]]),
       }),
-      execute: async ({ spreadId }) => {
-        try {
-          return await drawReading({ user, sessionId, spreadId });
-        } catch {
-          return { error: 'draw_failed' as const };
-        }
+      execute: async ({ context, spreadId }) => {
+        // Unreachable through the enum, kept as the draw_failed guard contract.
+        if (!getSpread(spreadId)) return { error: 'draw_failed' as const };
+        return { context, ...pickReading(context, spreadId) };
       },
     }),
 
@@ -110,7 +143,6 @@ export function createTarotTools({ user, sessionId }: { user: User | null; sessi
         if (!user) {
           return { results: [] };
         }
-        const { createClient } = await import('@/lib/supabase/server');
         const supabase = await createClient();
         const { data } = await supabase
           .from('journal_entries')
@@ -151,7 +183,3 @@ export function createTarotTools({ user, sessionId }: { user: User | null; sessi
     }),
   };
 }
-
-export type TarotTools = ReturnType<typeof createTarotTools>;
-
-export const ALL_SPREAD_IDS = SPREADS.map((s) => s.id);

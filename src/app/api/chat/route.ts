@@ -13,13 +13,21 @@ import { buildSystemPrompt, type MemoryForPrompt } from '@/lib/ai/system-prompt'
 import { classify } from '@/lib/ai/safety';
 import { createTarotTools } from '@/lib/ai/tools';
 import { createClient, getAuthUser, isSupabaseServerConfigured } from '@/lib/supabase/server';
-import type { MessageMeta, Profile } from '@/lib/types';
+import type { MessageMeta, Profile, SpreadId } from '@/lib/types';
 
 export const maxDuration = 60;
 
 const bodySchema = z.object({
   sessionId: z.string().uuid().optional(),
   messages: z.array(z.custom<UIMessage>()).min(1),
+  // Guest memories (PRD §13, §41): the client vouches with an explicit
+  // snapshot per request; the server sanitizes before any prompt use.
+  guestMemory: z
+    .object({
+      enabled: z.boolean(),
+      items: z.array(z.object({ category: z.string(), content: z.string() })).max(20),
+    })
+    .optional(),
 });
 
 function joinText(message: UIMessage): string {
@@ -51,7 +59,7 @@ export async function POST(request: Request) {
     return Response.json({ error: 'invalid_body' }, { status: 400 });
   }
 
-  const { sessionId, messages } = parsed.data;
+  const { sessionId, messages, guestMemory } = parsed.data;
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
   const userText = lastUser ? joinText(lastUser) : '';
   const safety = classify(userText);
@@ -123,6 +131,13 @@ export async function POST(request: Request) {
       meta: {},
     });
     if (error) return Response.json({ error: 'persist_failed' }, { status: 500 });
+  } else if (guestMemory?.enabled) {
+    // Guests keep data client-side (PRD §13); memories reach the prompt only when
+    // this request explicitly opts in, sanitized like the account path (PRD §59).
+    memories = guestMemory.items
+      .map((item) => ({ category: item.category, content: item.content.trim() }))
+      .filter((item) => item.content.length > 0)
+      .slice(0, 20);
   }
 
   // Explicitly approved journal context (PRD §43, §44, §60): only entries the
@@ -141,7 +156,7 @@ export async function POST(request: Request) {
   }
 
   // High-stakes conversations get NO tarot tools at all (plan: Safety classifier).
-  const tools = safety.highStakes ? undefined : createTarotTools({ user, sessionId: effectiveSessionId });
+  const tools = safety.highStakes ? undefined : createTarotTools({ user });
 
   const result = streamText({
     model: getModel(),
@@ -158,17 +173,21 @@ export async function POST(request: Request) {
     void (async () => {
       try {
         const [text, responseMessages] = await Promise.all([result.text, result.responseMessages]);
-        const meta: MessageMeta = {};
+        const meta: MessageMeta = {
+          // Persist the crisis classification so surfaces can react on load
+          // without re-classifying (plan: Safety classifier).
+          ...(safety.crisis ? { crisis: true } : {}),
+        };
         for (const message of responseMessages) {
           const content = typeof message.content === 'string' ? [] : message.content;
           for (const part of content) {
             if (part.type !== 'tool-result') continue;
             const output = part.output as Record<string, unknown> | undefined;
-            if (part.toolName === 'suggest_spread' && output?.options) {
-              meta.spreadSuggestion = output as NonNullable<MessageMeta['spreadSuggestion']>;
-            }
-            if (part.toolName === 'draw_tarot_cards' && output?.cards) {
-              meta.readingId = output.readingId as string;
+            if (part.toolName === 'recommend_reading' && output?.recommendedSpreadId) {
+              meta.readingRecommendation = {
+                recommendedSpreadId: output.recommendedSpreadId as SpreadId,
+                context: (output.context as string) ?? '',
+              };
             }
             if (part.toolName === 'request_clarification' && output?.clarifier) {
               meta.clarify = {

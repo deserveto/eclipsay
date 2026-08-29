@@ -4,6 +4,7 @@ import {
   clearGuestData,
   emptyGuestStore,
   getGuestSession,
+  saveGuestProfile,
   loadGuestStore,
   saveInsight,
   saveJournalEntry,
@@ -127,5 +128,22 @@ describe('guest store round-trip', () => {
     expect(loadGuestStore(storage)).toEqual(emptyGuestStore());
     clearGuestData(storage);
     expect(loadGuestStore(storage)).toEqual(emptyGuestStore());
+  });
+});
+
+describe('guest memory flag', () => {
+  it('defaults memoryEnabled to true for legacy records without the flag', () => {
+    storage.setItem(
+      'eclipsay.guest.v1',
+      JSON.stringify({ version: 1, profile: { reflectionGoal: 'growth' } }),
+    );
+    expect(loadGuestStore(storage).profile.memoryEnabled).toBe(true);
+  });
+
+  it('persists a disabled memory toggle across a round-trip', () => {
+    saveGuestProfile({ memoryEnabled: false }, storage);
+    expect(loadGuestStore(storage).profile.memoryEnabled).toBe(false);
+    saveGuestProfile({ memoryEnabled: true }, storage);
+    expect(loadGuestStore(storage).profile.memoryEnabled).toBe(true);
   });
 });

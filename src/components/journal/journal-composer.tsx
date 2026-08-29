@@ -1,7 +1,9 @@
 'use client';
 
 import { Suspense, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { ArrowLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -20,7 +22,7 @@ const ASSIST_ACTIONS: { type: AiNoteType; label: string }[] = [
   { type: 'summary', label: 'Summarize what I\u2019m feeling' },
 ];
 
-function Composer() {
+function ComposerInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const editId = searchParams.get('id');
@@ -101,7 +103,19 @@ function Composer() {
 
   return (
     <div className="mx-auto w-full max-w-2xl space-y-6 px-4 py-8">
-      <header className="flex items-center justify-between">
+      <header className="space-y-1">
+        <Link
+          href="/journal"
+          onClick={(e) => {
+            if (body.trim().length > 0 && !window.confirm('Leave this entry? Unsaved text will be lost.')) {
+              e.preventDefault();
+            }
+          }}
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ArrowLeft className="size-4" aria-hidden />
+          Journal
+        </Link>
         <h1 className="text-2xl font-medium tracking-tight">{editId ? 'Edit entry' : 'New entry'}</h1>
       </header>
 
@@ -147,7 +161,7 @@ function Composer() {
             <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">AI notes</p>
             {entry.ai_notes.map((note) => (
               <div key={note.id} className="rounded-lg bg-card px-3 py-2 text-sm leading-6">
-                <p className="text-[10px] tracking-wide text-primary uppercase">{note.type}</p>
+                <p className="text-[11px] tracking-wide text-primary uppercase">{note.type}</p>
                 <p className="whitespace-pre-wrap">{note.content}</p>
               </div>
             ))}
@@ -196,10 +210,11 @@ function Composer() {
   );
 }
 
-export default function JournalNewPage() {
+// useSearchParams needs a Suspense boundary under App Router.
+export function JournalComposer() {
   return (
     <Suspense fallback={null}>
-      <Composer />
+      <ComposerInner />
     </Suspense>
   );
 }

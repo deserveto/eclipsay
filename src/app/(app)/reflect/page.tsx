@@ -1,5 +1,4 @@
 import { Suspense } from 'react';
-import { AppShell } from '@/components/app-shell';
 import { ChatScreen } from '@/components/chat/chat-screen';
 
 export const metadata = {
@@ -8,10 +7,8 @@ export const metadata = {
 
 export default function ReflectPage() {
   return (
-    <AppShell>
-      <Suspense>
-        <ChatScreen />
-      </Suspense>
-    </AppShell>
+    <Suspense>
+      <ChatScreen />
+    </Suspense>
   );
 }

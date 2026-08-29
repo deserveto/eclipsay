@@ -119,3 +119,61 @@
     0 0 0 1px oklch(0.62 0.07 285 / 0.35),
     0 0 24px oklch(0.5 0.08 285 / 0.25);
 }
+
+/* Draw-bar entrance / card-glide (plan: conversational draw bar).
+   Resolves instantly under prefers-reduced-motion (paired with motion-reduce:animate-none). */
+@keyframes eclipsay-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Custom scrollbars (user request — project-wide): quiet warm pills in the
+   daylight app, moonpaper-white inside tarot (mystical) surfaces. Firefox
+   reads scrollbar-color; Chromium/Safari read ::-webkit-scrollbar. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: oklch(0.85 0.015 80) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 9999px;
+  background-color: oklch(0.85 0.015 80);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: oklch(0.76 0.02 75);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.mystical,
+.mystical * {
+  scrollbar-color: oklch(0.96 0.008 85 / 0.28) transparent;
+}
+
+.mystical ::-webkit-scrollbar-thumb {
+  background-color: oklch(0.96 0.008 85 / 0.28);
+}
+
+.mystical ::-webkit-scrollbar-thumb:hover {
+  background-color: oklch(0.96 0.008 85 / 0.45);
+}

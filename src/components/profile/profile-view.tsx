@@ -6,7 +6,7 @@ import { SignInDialog } from '@/components/auth/sign-in-dialog';
 import { useDataMode } from '@/hooks/use-data-mode';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 
-export default function ProfilePage() {
+export function ProfileView() {
   const { mode } = useDataMode();
   const [signInOpen, setSignInOpen] = useState(false);
   const [email, setEmail] = useState<string | null>(null);

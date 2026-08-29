@@ -4,22 +4,25 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, isStaticToolUIPart } from 'ai';
-import { ArrowUp, RefreshCw, PenLine, Sparkles, Clock } from 'lucide-react';
+import { ArrowUp, RefreshCw, PenLine, Sparkles, Clock, NotebookPen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Markdown } from '@/components/chat/markdown';
+import { CrisisResources } from '@/components/chat/crisis-resources';
 import { OnboardingDialogs } from '@/components/chat/onboarding-dialogs';
 import { MigrationDialog } from '@/components/auth/migration-dialog';
 import { SignInDialog } from '@/components/auth/sign-in-dialog';
 import { toast } from 'sonner';
 import { TarotSpread, DrawFailedCard } from '@/components/tarot/tarot-spread';
-import { DrawCeremony } from '@/components/tarot/draw-ceremony';
+import { DrawBar } from '@/components/tarot/draw-bar';
 import { ToolPartRenderer, type SearchHit } from '@/components/chat/tool-parts';
+import { classify } from '@/lib/ai/safety';
 import { track } from '@/lib/analytics';
 import { useDataMode } from '@/hooks/use-data-mode';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
-import { getSpread, SPREADS } from '@/lib/tarot/spreads';
-import { appendMessage, getGuestSession, saveFollowUp, saveInsight as saveGuestInsight, saveMemory, saveReading, saveSession } from '@/lib/guest/store';
+import { getSpread } from '@/lib/tarot/spreads';
+import { appendMessage, getGuestSession, loadGuestStore, saveFollowUp, saveInsight as saveGuestInsight, saveMemory, saveReading, saveSession } from '@/lib/guest/store';
 import { joinUiText, storedToUi, type ChatMessage } from '@/lib/chat/convert';
 import { makeEntry } from '@/lib/journal/entries';
 import type { DrawnCard } from '@/lib/tarot/types';
@@ -28,6 +31,34 @@ import type { MemoryCategory, StoredMessage, TarotReading } from '@/lib/types';
 function titleFrom(text: string): string {
   const compact = text.replace(/\s+/g, ' ').trim();
   return compact.length === 0 ? 'New Reflection' : compact.slice(0, 48);
+}
+type GuestMemoryPayload = { enabled: boolean; items: { category: string; content: string }[] };
+
+// Contract with POST /api/chat (guest mode only): guestMemory carries the
+// guest's active memories so reflection stays personal without an account
+// (PRD §13). `memoryEnabled` arrives on the guest profile with the memory
+// migration and defaults to on.
+function guestMemoryPayload(): GuestMemoryPayload {
+  const store = loadGuestStore();
+  const profile = store.profile;
+  const items = store.memories
+    .filter((memory) => memory.active)
+    .map((memory) => ({ category: memory.category, content: memory.content.trim() }))
+    .filter((item) => item.content.length > 0)
+    .slice(0, 20);
+  return { enabled: profile.memoryEnabled ?? true, items };
+}
+
+function relativeTime(iso: string): string {
+  const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  const days = Math.round(hours / 24);
+  if (days < 14) return `${days} day${days === 1 ? '' : 's'} ago`;
+  const weeks = Math.round(days / 7);
+  return `${weeks} week${weeks === 1 ? '' : 's'} ago`;
 }
 
 type ReadingsState = Record<string, { spreadId: string; cards: DrawnCard[] }>;
@@ -41,8 +72,14 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   // Stable per-screen session id; a deep link reuses the existing session.
   const sessionId = useMemo(() => initialSessionId ?? crypto.randomUUID(), [initialSessionId]);
   const transport = useMemo(
-    () => new DefaultChatTransport({ api: '/api/chat', body: { sessionId } }),
-    [sessionId],
+    () =>
+      new DefaultChatTransport({
+        api: '/api/chat',
+        // Resolvable body: evaluated per request, so guest memories are read
+        // fresh at send time instead of frozen into the transport.
+        body: () => (mode === 'guest' ? { sessionId, guestMemory: guestMemoryPayload() } : { sessionId }),
+      }),
+    [sessionId, mode],
   );
 
   // Readings hydrated at mount render revealed; live ones animate.
@@ -50,12 +87,19 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   const [readings, setReadings] = useState<ReadingsState>({});
   const [clarifyingCardId, setClarifyingCardId] = useState<string | null>(null);
   const [declinedToolCalls, setDeclinedToolCalls] = useState<Set<string>>(new Set());
-  const [ceremony, setCeremony] = useState<{ cards: DrawnCard[]; readingId: string; spreadId: string } | null>(null);
+  const [drawBar, setDrawBar] = useState<{ readingId: string; spreadId: string; cards: DrawnCard[] } | null>(null);
   const [drawFailedSpread, setDrawFailedSpread] = useState<string | null>(null);
   const [checkInOpen, setCheckInOpen] = useState(false);
   const [signInOpen, setSignInOpen] = useState(false);
   const [actedConfirms, setActedConfirms] = useState<Set<string>>(new Set());
   const [approvedContext, setApprovedContext] = useState<SearchHit[]>([]);
+  const [savedMessageIds, setSavedMessageIds] = useState<Set<string>>(new Set());
+  // ?followup=<id> is consumed once per mount (useState initializer). The
+  // banner already marked the follow-up 'revisited' on click; this card only
+  // re-anchors the transcript and has no write side effects.
+  const [followupId] = useState(() => searchParams.get('followup'));
+  const [followupDismissed, setFollowupDismissed] = useState(false);
+  const [lastActiveAt, setLastActiveAt] = useState<string | null>(null);
 
   const chat = useChat<ChatMessage>({
     id: sessionId,
@@ -88,6 +132,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
         if (dbMessages.length > 0) {
           initialMessageIds.current = new Set(dbMessages.map((m) => m.id));
           chat.setMessages(dbMessages.map(storedToUi));
+          setLastActiveAt(dbMessages[dbMessages.length - 1].created_at);
         }
         const dbReadings: ReadingsState = {};
         for (const r of (reads.data ?? []) as unknown as TarotReading[]) {
@@ -106,25 +151,37 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
         const stored: ReadingsState = {};
         for (const r of session.readings) stored[r.id] = { spreadId: r.spread_id, cards: r.cards };
         setReadings(stored);
+        setLastActiveAt(session.updated_at);
       }
     };
     void hydrate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, mode]);
 
-  // Pre-fill composer from "Reflect with tarot" entry action.
+  // Mount-only URL intents: 'prefill' carries text over from the journal
+  // composer; 'tarot' seeds the starter prompt for the entry action. Each is
+  // read exactly once per mount, and prefill never auto-sends.
   useEffect(() => {
-    if (searchParams.get('tarot') === '1' && chat.messages.length === 0) {
+    const prefill = searchParams.get('prefill');
+    if (prefill && input.length === 0) {
+      setInput(prefill.slice(0, 200));
+    } else if (searchParams.get('tarot') === '1' && chat.messages.length === 0) {
       setInput("I'd like to explore something with a few cards.");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [spreadPickerOpen, setSpreadPickerOpen] = useState(false);
 
+  // Fires once per recommend_reading tool call that reaches output-available
+  // (plan: tarot_suggested analytics, previously never emitted).
+  const suggestedTracked = useRef<Set<string>>(new Set());
   // Sync tool-produced readings (model-initiated draws/clarifications) into local state.
   useEffect(() => {
     for (const message of chat.messages) {
       for (const part of message.parts) {
+        if (part.type === 'tool-recommend_reading' && !suggestedTracked.current.has(part.toolCallId)) {
+          suggestedTracked.current.add(part.toolCallId);
+          track('tarot_suggested');
+        }
         if (!isStaticToolUIPart(part) || part.state !== 'output-available') continue;
         const output = part.output as
           | {
@@ -137,22 +194,6 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
             }
           | undefined;
         if (!output || output.error) continue;
-
-        if (part.type === 'tool-draw_tarot_cards' && output.cards && output.readingId && !readings[output.readingId]) {
-          const readingId = output.readingId;
-          const cards = output.cards;
-          const spreadId = output.spreadId ?? 'one_card';
-          setReadings((prev) => ({ ...prev, [readingId]: { spreadId, cards } }));
-          saveReading(sessionId, {
-            id: readingId,
-            session_id: sessionId,
-            user_id: '',
-            spread_id: spreadId,
-            seed: 0,
-            cards,
-            created_at: new Date().toISOString(),
-          });
-        }
 
         if (part.type === 'tool-request_clarification' && output.clarifier && output.readingId) {
           const readingId = output.readingId;
@@ -252,7 +293,10 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     track('tarot_started');
   };
 
-  const startQuickDraw = async (spreadId: string) => {
+  // Every reading begins here (plan: recommendation → draw bar). The REST
+  // draw fixes the seed server-side (PRD §25–§26); the bar only sequences
+  // the reveal, and completion sends the [Cards drawn] summary for the model.
+  const beginReading = async (spreadId: string) => {
     ensureGuestSession('Tarot reflection');
     const payload = await restDraw(spreadId);
     if (!payload) {
@@ -260,28 +304,13 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
       return;
     }
     commitDraw(payload);
-    const title = getSpread(spreadId)?.title ?? 'reading';
-    const summary = payload.cards.map((c, i) => `${i + 1}. ${c.name} (${c.orientation}) — ${c.position}`).join(' | ');
-    send(`[Cards drawn · ${title}] ${summary}. Please interpret this reading reflectively.`, {
-      readingId: payload.readingId,
-    });
+    setDrawBar({ readingId: payload.readingId, spreadId: payload.spreadId, cards: payload.cards });
   };
 
-  const startInteractiveDraw = async (spreadId: string) => {
-    ensureGuestSession('Tarot reflection');
-    const payload = await restDraw(spreadId);
-    if (!payload) {
-      setDrawFailedSpread(spreadId);
-      return;
-    }
-    commitDraw(payload);
-    setCeremony({ cards: payload.cards, readingId: payload.readingId, spreadId: payload.spreadId });
-  };
-
-  const completeCeremony = (order: number[]) => {
-    if (!ceremony) return;
-    const { readingId, spreadId, cards } = ceremony;
-    setCeremony(null);
+  const completeDraw = (order: number[]) => {
+    if (!drawBar) return;
+    const { readingId, spreadId, cards } = drawBar;
+    setDrawBar(null);
     const title = getSpread(spreadId)?.title ?? 'reading';
     const summary = cards.map((c, i) => `${i + 1}. ${c.name} (${c.orientation}) — ${c.position}`).join(' | ');
     send(`[Cards drawn · ${title}] ${summary}. Please interpret this reading reflectively.`, {
@@ -327,7 +356,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
 
   const markActed = (toolCallId: string) => setActedConfirms((prev) => new Set(prev).add(toolCallId));
 
-  const saveInsightText = async (text: string) => {
+  const saveInsightText = async (text: string): Promise<boolean> => {
     const now = new Date().toISOString();
     if (mode === 'account' && isSupabaseConfigured()) {
       const res = await fetch('/api/insights', {
@@ -337,7 +366,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
       });
       if (!res.ok) {
         toast.error('Could not save the insight. It stays on screen — try again.');
-        return;
+        return false;
       }
     } else {
       // Guest: save locally, then offer the account as the value moment (§14).
@@ -346,7 +375,39 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     }
     track('insight_saved');
     toast.success('Insight saved to your journal.');
+    return true;
   };
+
+  // Manual capture affordance (PRD §4.2 — user agency): every assistant
+  // message can be saved through the exact write path the propose_insight
+  // confirm uses; success just flips the local affordance to its saved state.
+  const saveMessageInsight = (messageId: string, text: string) => {
+    void saveInsightText(text).then((saved) => {
+      if (saved) setSavedMessageIds((prev) => new Set(prev).add(messageId));
+    });
+  };
+
+  // Crisis card visibility is derived only from the committed transcript
+  // (PRD §52–§55): the classifier runs on the latest user text, and a
+  // hydrated assistant reply can carry meta.crisis. Deterministic — the same
+  // message list renders the same card, nothing flashes while a reply
+  // streams, and a newer non-crisis exchange hides it again.
+  const crisisVisible = useMemo(() => {
+    let lastUserIndex = -1;
+    for (let i = chat.messages.length - 1; i >= 0; i--) {
+      if (chat.messages[i].role === 'user') {
+        lastUserIndex = i;
+        break;
+      }
+    }
+    if (lastUserIndex === -1) return false;
+    if (classify(joinUiText(chat.messages[lastUserIndex])).crisis) return true;
+    for (let i = lastUserIndex + 1; i < chat.messages.length; i++) {
+      const message = chat.messages[i];
+      if (message.role === 'assistant' && message.metadata?.crisis === true) return true;
+    }
+    return false;
+  }, [chat.messages]);
 
   const scheduleFollowUp = async (when: 'tomorrow' | '3days' | '1week') => {
     const day = 24 * 60 * 60 * 1000;
@@ -428,99 +489,60 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
         title="Create an account to keep this reflection."
       />
 
-      {ceremony && (
-        <DrawCeremony count={ceremony.cards.length} onCancel={() => setCeremony(null)} onComplete={completeCeremony} />
-      )}
-      {checkInOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Schedule a check-in"
-        >
-          <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-5 shadow-xl">
-            <h2 className="text-base font-medium">Check in with me later</h2>
-            <p className="mt-1 text-xs text-muted-foreground">
+      <Dialog open={checkInOpen} onOpenChange={setCheckInOpen}>
+        <DialogContent className="max-w-sm rounded-2xl border border-border bg-card p-5 shadow-xl ring-0">
+          <DialogHeader>
+            <DialogTitle>Check in with me later</DialogTitle>
+            <DialogDescription className="text-xs">
               A gentle in-app reminder to revisit this reflection. No emails, no pressure.
-            </p>
-            <div className="mt-4 flex flex-col gap-2">
-              {(
-                [
-                  { key: 'tomorrow', label: 'Tomorrow' },
-                  { key: '3days', label: 'In 3 days' },
-                  { key: '1week', label: 'In 1 week' },
-                ] as const
-              ).map(({ key, label }) => (
-                <Button
-                  key={key}
-                  variant="secondary"
-                  onClick={() => {
-                    setCheckInOpen(false);
-                    void scheduleFollowUp(key);
-                  }}
-                >
-                  {label}
-                </Button>
-              ))}
-              <Button variant="ghost" onClick={() => setCheckInOpen(false)}>
-                Cancel
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2">
+            {(
+              [
+                { key: 'tomorrow', label: 'Tomorrow' },
+                { key: '3days', label: 'In 3 days' },
+                { key: '1week', label: 'In 1 week' },
+              ] as const
+            ).map(({ key, label }) => (
+              <Button
+                key={key}
+                variant="secondary"
+                onClick={() => {
+                  setCheckInOpen(false);
+                  void scheduleFollowUp(key);
+                }}
+              >
+                {label}
               </Button>
-            </div>
+            ))}
+            <Button variant="ghost" onClick={() => setCheckInOpen(false)}>
+              Cancel
+            </Button>
           </div>
-        </div>
-      )}
-
-      {spreadPickerOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Choose a spread"
-        >
-          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-xl">
-            <h2 className="text-base font-medium">Choose a spread</h2>
-            <p className="mt-1 text-xs text-muted-foreground">Cards are always drawn fresh by the engine.</p>
-            <div className="mt-4 flex max-h-[50vh] flex-col gap-3 overflow-y-auto">
-              {SPREADS.map((spread) => (
-                <div key={spread.id} className="rounded-xl border border-border px-3.5 py-3">
-                  <p className="text-sm font-medium">{spread.title}</p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">{spread.positions.join(' · ')}</p>
-                  <div className="mt-2 flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => {
-                        setSpreadPickerOpen(false);
-                        void startQuickDraw(spread.id);
-                      }}
-                    >
-                      Draw for me
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
-                        setSpreadPickerOpen(false);
-                        void startInteractiveDraw(spread.id);
-                      }}
-                    >
-                      I&apos;ll choose the cards
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className="mt-4 text-right">
-              <Button size="sm" variant="ghost" onClick={() => setSpreadPickerOpen(false)}>
-                Cancel
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+        </DialogContent>
+      </Dialog>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col px-4 pt-6 pb-4">
+          {followupId && !followupDismissed && (
+            <div className="mb-6 rounded-2xl border border-border bg-card px-4 py-3.5">
+              <p className="text-sm font-medium">Picking this back up</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {lastActiveAt ? `You were last here ${relativeTime(lastActiveAt)}. ` : ''}Whenever you&apos;re ready — no rush.
+              </p>
+              <div className="mt-2">
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  aria-label="Dismiss this re-entry note"
+                  onClick={() => setFollowupDismissed(true)}
+                >
+                  Got it
+                </Button>
+              </div>
+            </div>
+          )}
           {empty ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 py-24 text-center">
               <h1 className="text-2xl font-medium tracking-tight">What&apos;s on your mind?</h1>
@@ -583,20 +605,15 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
                     </div>
                   );
                 }
-                const modelDrawPanel =
-                  meta?.readingId && readings[meta.readingId]
-                    ? !(chat.messages.some((m) => m.role === 'user' && m.metadata?.readingId === meta.readingId))
-                    : false;
+                const messageText = joinUiText(message);
                 return (
-                  <div key={message.id} className="flex flex-col gap-2">
+                  <div key={message.id} className="group flex flex-col gap-2">
                     <ToolPartRenderer
                       message={message}
                       declined={declinedToolCalls.has(message.id)}
-                      onPickSpread={(spreadId: string, drawMode: 'quick' | 'interactive') =>
-                        drawMode === 'quick' ? void startQuickDraw(spreadId) : void startInteractiveDraw(spreadId)
-                      }
-                      onDeclineSpread={() => setDeclinedToolCalls((prev) => new Set(prev).add(message.id))}
-                      onRetryDraw={() => chat.regenerate()}
+                      onBeginReading={(spreadId) => void beginReading(spreadId)}
+                      onDecline={() => setDeclinedToolCalls((prev) => new Set(prev).add(message.id))}
+                      onAnswerClarify={(text) => send(text)}
                       confirm={{
                         actedIds: actedConfirms,
                         markActed: markActed,
@@ -606,23 +623,31 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
                         onBringItIn: bringItIn,
                       }}
                     />
-                    {modelDrawPanel && meta?.readingId && readings[meta.readingId] && (
-                      <TarotSpread
-                        reading={{
-                          readingId: meta.readingId,
-                          spreadId: readings[meta.readingId].spreadId,
-                          cards: readings[meta.readingId].cards,
-                        }}
-                        startRevealed={isInitial}
-                        onClarify={clarifyCard}
-                        clarifyingCardId={clarifyingCardId}
-                        onRevealComplete={() => track('tarot_completed')}
-                      />
+                    <Markdown>{messageText}</Markdown>
+                    {messageText.trim().length > 0 && (
+                      <div>
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="ghost"
+                          disabled={savedMessageIds.has(message.id)}
+                          aria-label="Save this reflection to your journal"
+                          className={`text-muted-foreground motion-reduce:transition-none ${
+                            savedMessageIds.has(message.id)
+                              ? 'opacity-100'
+                              : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100'
+                          }`}
+                          onClick={() => saveMessageInsight(message.id, messageText)}
+                        >
+                          <NotebookPen aria-hidden />
+                          {savedMessageIds.has(message.id) ? 'Saved' : 'Save to journal'}
+                        </Button>
+                      </div>
                     )}
-                    <Markdown>{joinUiText(message)}</Markdown>
                   </div>
                 );
               })}
+              {crisisVisible && <CrisisResources />}
               {busy && (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground" aria-live="polite">
                   <span className="size-2 animate-pulse rounded-full bg-primary/60" />
@@ -634,7 +659,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
                   onRetry={() => {
                     const spreadId = drawFailedSpread;
                     setDrawFailedSpread(null);
-                    void startQuickDraw(spreadId);
+                    void beginReading(spreadId);
                   }}
                 />
               )}
@@ -667,6 +692,13 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
           )}
         </div>
       </div>
+      {drawBar && (
+        <div className="bg-background/95 px-4 pb-2">
+          <div className="mx-auto w-full max-w-2xl">
+            <DrawBar cards={drawBar.cards} onComplete={completeDraw} onCancel={() => setDrawBar(null)} />
+          </div>
+        </div>
+      )}
 
       <div className="border-t bg-background/95 px-4 py-3">
         <form
@@ -692,7 +724,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
             variant="ghost"
             aria-label="Explore with cards"
             title="Explore with cards"
-            onClick={() => setSpreadPickerOpen(true)}
+            onClick={() => setInput("I'd like to explore something with a few cards.")}
           >
             <Sparkles className="size-4 text-primary" aria-hidden />
           </Button>

@@ -22,7 +22,7 @@ function dayLabel(iso: string): string {
 }
 
 // Journal timeline (PRD §36): chronological, grouped by day, type badges.
-export default function JournalPage() {
+export function JournalView() {
   const [entries, setEntries] = useState<JournalEntry[] | null>(null);
 
   useEffect(() => {

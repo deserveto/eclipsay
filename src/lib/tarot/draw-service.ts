@@ -2,7 +2,7 @@ import { randomInt, randomUUID } from 'node:crypto';
 import type { User } from '@supabase/supabase-js';
 import { drawCards, drawClarification } from '@/lib/tarot/engine';
 import { getSpread } from '@/lib/tarot/spreads';
-import { hasCard } from '@/lib/tarot/cards';
+import { getCard, hasCard } from '@/lib/tarot/cards';
 import { createClient } from '@/lib/supabase/server';
 import type { DrawnCard } from '@/lib/tarot/types';
 
@@ -81,7 +81,8 @@ export async function clarifyReading(args: {
 
   const seed = generateSeed();
   const clarifier = drawClarification({
-    reading: { cards: drawnIds.map((id) => ({ cardId: id, name: id } as DrawnCard)) },
+    // Card identity always comes from the engine deck (PRD §22) — never a raw id.
+    reading: { cards: drawnIds.map((id) => ({ cardId: id, name: getCard(id).name } as DrawnCard)) },
     clarifies: cardId,
     seed,
   });

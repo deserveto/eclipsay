@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { MessagesSquare, Sparkles, NotebookPen } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { getAuthUser, isSupabaseServerConfigured } from '@/lib/supabase/server';
+import { WelcomeBack } from '@/components/landing/welcome-back';
 
 // Landing (PRD §11.1): guest-first, "What's on your mind?" + three entry actions.
 // Signed-in users go straight to the reflection space.
@@ -62,6 +63,7 @@ export default async function Home() {
             </Link>
           ))}
         </div>
+        <WelcomeBack />
       </div>
     </main>
   );

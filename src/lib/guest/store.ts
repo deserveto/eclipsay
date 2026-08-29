@@ -20,6 +20,9 @@ export const GUEST_STORE_KEY = 'eclipsay.guest.v1';
 export type GuestProfile = {
   reflectionGoal?: ReflectionGoal;
   tarotFamiliarity?: TarotFamiliarity;
+  // Master switch for memory use in prompts (PRD §41). Always present in memory:
+  // readStore defaults it to true for records written before this field existed.
+  memoryEnabled: boolean;
 };
 
 export type GuestSession = ReflectionSession & {
@@ -41,7 +44,7 @@ export type GuestStore = {
 export function emptyGuestStore(): GuestStore {
   return {
     version: 1,
-    profile: {},
+    profile: { memoryEnabled: true },
     sessions: [],
     journal: [],
     insights: [],
@@ -63,10 +66,17 @@ function readStore(storage: Storage | null): GuestStore {
   try {
     const parsed = JSON.parse(raw) as GuestStore;
     if (parsed.version !== 1) return emptyGuestStore();
+    // Normalize the profile so records written before memoryEnabled upgrade
+    // silently to the default (on) instead of blocking memory use (PRD §41).
+    const profile: GuestProfile = {
+      reflectionGoal: parsed.profile?.reflectionGoal,
+      tarotFamiliarity: parsed.profile?.tarotFamiliarity,
+      memoryEnabled: parsed.profile?.memoryEnabled ?? true,
+    };
     return {
       ...emptyGuestStore(),
       ...parsed,
-      profile: parsed.profile ?? {},
+      profile,
       sessions: parsed.sessions ?? [],
       journal: parsed.journal ?? [],
       insights: parsed.insights ?? [],
@@ -94,7 +104,7 @@ export function loadGuestStore(storage?: Storage): GuestStore {
 }
 
 
-export function saveGuestProfile(patch: GuestProfile & { onboardingDone?: boolean }, storage?: Storage): void {
+export function saveGuestProfile(patch: Partial<GuestProfile> & { onboardingDone?: boolean }, storage?: Storage): void {
   mutate((store) => {
     const { onboardingDone, ...profilePatch } = patch;
     store.profile = { ...store.profile, ...profilePatch };
