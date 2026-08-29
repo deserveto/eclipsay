@@ -63,6 +63,12 @@ export async function POST(request: Request) {
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
   const userText = lastUser ? joinText(lastUser) : '';
   const safety = classify(userText);
+  // Tarot event notices (PRD §25, §32): the client announces a draw or a
+  // clarification draw as bracketed data. The interpret directive is injected
+  // into the system prompt so the notice's wording never sets the reply
+  // language — the model answers in the user's own language instead.
+  const lastMeta = (lastUser?.metadata ?? {}) as MessageMeta;
+  const tarotEvent = lastMeta.readingId ? ('draw' as const) : lastMeta.clarify ? ('clarify' as const) : undefined;
 
   let user: User | null = null;
   let profile: Profile | null = null;
@@ -160,7 +166,7 @@ export async function POST(request: Request) {
 
   const result = streamText({
     model: getModel(),
-    system: buildSystemPrompt({ profile, memories, safety, approvedContext }),
+    system: buildSystemPrompt({ profile, memories, safety, approvedContext, tarotEvent }),
     messages: await convertToModelMessages(messages),
     stopWhen: isStepCount(5),
     tools,
@@ -168,8 +174,8 @@ export async function POST(request: Request) {
 
   if (user && effectiveSessionId) {
     const supabase = await createClient();
-    const sid = effectiveSessionId;
     const userId = user.id;
+    const sid = effectiveSessionId;
     void (async () => {
       try {
         const [text, responseMessages] = await Promise.all([result.text, result.responseMessages]);

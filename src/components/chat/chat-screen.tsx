@@ -21,7 +21,6 @@ import { classify } from '@/lib/ai/safety';
 import { track } from '@/lib/analytics';
 import { useDataMode } from '@/hooks/use-data-mode';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
-import { getSpread } from '@/lib/tarot/spreads';
 import { appendMessage, getGuestSession, loadGuestStore, saveFollowUp, saveInsight as saveGuestInsight, saveMemory, saveReading, saveSession, updateMessageMeta } from '@/lib/guest/store';
 import { extractToolParts, joinUiText, storedToUi, type ChatMessage } from '@/lib/chat/convert';
 import { makeEntry } from '@/lib/journal/entries';
@@ -306,7 +305,11 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
       ...metadata,
       approvedContext: approvedContext.length > 0 ? approvedContext.map(({ entryId, title }) => ({ entryId, title })) : undefined,
     };
-    const attempt = () => chat.sendMessage({ text: trimmed, metadata: fullMetadata });
+    // One id shared by the optimistic message and the guest-store row below:
+    // the store-change merge dedupes by id, so the persisted row can never
+    // re-import as a second transcript copy of the same message.
+    const messageId = crypto.randomUUID();
+    const attempt = () => chat.sendMessage({ text: trimmed, metadata: fullMetadata, messageId });
     if (chat.status === 'error') {
       chat.clearError();
       setTimeout(attempt, 80);
@@ -315,16 +318,20 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     } else {
       return; // busy — nothing to send right now
     }
-    ensureGuestSession(trimmed);
-    appendMessage(sessionId, {
-      id: crypto.randomUUID(),
-      session_id: sessionId,
-      user_id: '',
-      role: 'user',
-      content: trimmed,
-      meta: metadata ?? {},
-      created_at: new Date().toISOString(),
-    });
+    if (mode === 'guest') {
+      ensureGuestSession(trimmed);
+      // Same id as the optimistic message above (guest mode only — account
+      // sessions persist entirely server-side, PRD §34).
+      appendMessage(sessionId, {
+        id: messageId,
+        session_id: sessionId,
+        user_id: '',
+        role: 'user',
+        content: trimmed,
+        meta: metadata ?? {},
+        created_at: new Date().toISOString(),
+      });
+    }
     lastSent.current = trimmed;
     setInput('');
   };
@@ -373,17 +380,19 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     if (!drawBar) return;
     const { readingId, spreadId, cards } = drawBar;
     setDrawBar(null);
-    const title = getSpread(spreadId)?.title ?? 'reading';
+    // Language-neutral event notice: data only, no natural-language ask. The
+    // "interpret now" directive lives in the system prompt (route-side), so
+    // this notice's wording can never set the reply's language.
     const summary = cards.map((c, i) => `${i + 1}. ${c.name} (${c.orientation}) — ${c.position}`).join(' | ');
-    send(`[Cards drawn · ${title}] ${summary}. Please interpret this reading reflectively.`, {
-      readingId,
-      revealOrder: order,
-    });
+    send(`[Cards drawn · ${spreadId}] ${summary}`, { readingId, revealOrder: order });
   };
 
   const clarifyCard = async (readingId: string, cardId: string) => {
     const reading = readings[readingId];
-    if (!reading || clarifyingCardId) return;
+    // A clarification is only meaningful when its interpret message can be
+    // sent (send no-ops while a generation is in flight) — otherwise the
+    // drawn card would appear with no reading attached.
+    if (!reading || clarifyingCardId || chat.status !== 'ready') return;
     setClarifyingCardId(cardId);
     try {
       const res = await fetch('/api/tarot/clarify', {
@@ -405,8 +414,9 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
         created_at: new Date().toISOString(),
       });
       const target = reading.cards.find((c) => c.cardId === cardId);
+      // Language-neutral event notice (see completeDraw): data only.
       send(
-        `[Clarification] ${clarifier.name} (${clarifier.orientation}) was drawn to clarify ${target?.name ?? cardId}. Please interpret the pair together.`,
+        `[Clarification · ${clarifier.cardId} → ${cardId}] ${clarifier.name} (${clarifier.orientation}) clarifies ${target?.name ?? cardId}`,
         { clarify: { readingId, targetCardId: cardId, clarifierCardId: clarifier.cardId } },
       );
     } finally {
@@ -670,7 +680,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
                       <div className="flex justify-end">
                         <div
                           className={`max-w-[85%] rounded-2xl rounded-br-sm bg-secondary px-4 py-2.5 leading-7 whitespace-pre-wrap ${
-                            meta?.readingId ? 'text-xs text-muted-foreground italic' : 'text-[15px]'
+                            meta?.readingId || meta?.clarify ? 'text-xs text-muted-foreground italic' : 'text-[15px]'
                           }`}
                         >
                           {joinUiText(message)}

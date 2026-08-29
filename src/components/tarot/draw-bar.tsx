@@ -134,7 +134,9 @@ export function DrawBar({
           ))}
         </div>
 
-        {/* Face-down fan; one click per card. */}
+        {/* Face-down fan; one click per card. Feedback stays inside the card
+            bounds (scale + glow): the scroll container clips translated
+            cards, since overflow-x implies overflow-y clipping. */}
         <div className="flex flex-1 gap-1.5 overflow-x-auto pb-1">
           {Array.from({ length: fanSize }, (_, i) => {
             const isUsed = used.has(i);
@@ -149,7 +151,11 @@ export function DrawBar({
                 aria-label={isUsed ? `Card ${i + 1} drawn` : `Draw card ${Math.min(revealedCount + 1, total)} of ${total}`}
                 className={`relative h-24 w-14 shrink-0 rounded-lg transition-all duration-200 ease-out [perspective:900px] motion-reduce:transition-none ${
                   isUsed || (fading && !isFlipping) ? 'opacity-0' : 'opacity-100'
-                } ${isFlipping ? '-translate-y-2' : 'hover:-translate-y-1 hover:border-white/60 hover:[box-shadow:0_0_0_1px_oklch(0.62_0.07_285/0.35),0_0_24px_oklch(0.5_0.08_285/0.25)]'}`}
+                } ${
+                  isFlipping
+                    ? 'scale-95 [box-shadow:0_0_0_1px_oklch(0.62_0.07_285/0.5),0_0_28px_oklch(0.5_0.08_285/0.4)]'
+                    : 'hover:border-white/60 hover:[box-shadow:0_0_0_1px_oklch(0.62_0.07_285/0.35),0_0_24px_oklch(0.5_0.08_285/0.25)]'
+                }`}
                 onClick={() => drawBack(i)}
               >
                 <span

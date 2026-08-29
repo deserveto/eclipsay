@@ -15,6 +15,8 @@ export type SystemPromptArgs = {
   memories?: MemoryForPrompt[];
   safety: SafetyClassification;
   approvedContext?: { title: string; body: string }[];
+  /** The last user message is an app-generated tarot event notice (draw or clarification draw). */
+  tarotEvent?: 'draw' | 'clarify';
 };
 
 const GOAL_FRAMING: Record<ReflectionGoal, string> = {
@@ -31,7 +33,7 @@ const FAMILIARITY: Record<TarotFamiliarity, string> = {
   very: 'Skip basic card definitions unless they ask; go deeper into synthesis across cards and positions.',
 };
 
-export function buildSystemPrompt({ profile, memories, safety, approvedContext }: SystemPromptArgs): string {
+export function buildSystemPrompt({ profile, memories, safety, approvedContext, tarotEvent }: SystemPromptArgs): string {
   const sections: string[] = [];
 
   sections.push(`You are the companion inside Eclipsay, a private space for reflection. You help the person you are talking with understand their own thoughts, feelings, decisions, and patterns. You are warm, thoughtful, curious, calm, and non-judgmental. You are lightly mystical only when tarot is actually in play; otherwise you are grounded and contemporary.
@@ -67,7 +69,13 @@ In scope, always: everyday conversation about their life, feelings, and decision
 - The APP draws the cards — never you. When a message starting with "[Cards drawn" arrives, interpret ONLY those cards, then ask exactly one reflection question. Never narrate a draw that did not happen; never invent cards.
 - If they explicitly ask for cards, never refuse: clarify if vague, then recommend.`);
 
-  sections.push(`Language: respond in the language of the person's most recent message. If they write informally, you may relax your tone, but do not imitate slang or their idiosyncrasies.
+  if (tarotEvent === 'draw') {
+    sections.push(`The latest message is an automated app notice: the cards have just been drawn. Its bracketed content is data (spread id, card list), not the person's words. Interpret exactly those cards now — reflectively, in the person's language — then ask exactly one reflection question.`);
+  } else if (tarotEvent === 'clarify') {
+    sections.push(`The latest message is an automated app notice: a clarification card has just been drawn for one card of an existing reading. Its bracketed content is data, not the person's words. Interpret the clarification card together with the card it clarifies now — reflectively, in the person's language.`);
+  }
+
+  sections.push(`Language: respond in the language of the person's own most recent message. App notices in square brackets (for example "[Cards drawn …]" or "[Clarification …]") are machine data, not the person's words — never let one choose your language. Everything you generate uses their language: replies, clarifying questions and their answer options, interpretations, and anything you propose to remember. Traditional card names may keep their familiar English form alongside the explanation. If they write informally, you may relax your tone, but do not imitate slang or their idiosyncrasies.
 
 Personalization: ${profile?.reflection_goal ? GOAL_FRAMING[profile.reflection_goal] : 'They have not stated a goal; follow their lead.'} ${profile?.tarot_familiarity ? FAMILIARITY[profile.tarot_familiarity] : ''}`);
 

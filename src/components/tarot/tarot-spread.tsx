@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { getCard } from '@/lib/tarot/cards';
 import { getSpread } from '@/lib/tarot/spreads';
 import type { DrawnCard } from '@/lib/tarot/types';
 import { CardDetailDialog } from './card-detail-dialog';
@@ -72,7 +71,9 @@ export function TarotSpread({
     }
   }, [revealed, reading.cards.length, onRevealComplete]);
 
-  const allRevealed = revealed.size >= reading.cards.length;
+  // Clarification cards (PRD §32) join after the reveal; they are shown
+  // face-up by default — they exist to be seen, never as suspense.
+  const allRevealed = reading.cards.every((card, i) => revealed.has(i) || card.clarifies !== undefined);
   const clarifyFor = (cardId: string) => reading.cards.find((c) => c.clarifies === cardId);
 
   return (
@@ -92,8 +93,7 @@ export function TarotSpread({
 
       <div className="flex gap-4 overflow-x-auto pb-2 sm:gap-5">
         {reading.cards.map((card, index) => {
-          const info = getCard(card.cardId);
-          const isRevealed = revealed.has(index);
+          const isRevealed = revealed.has(index) || card.clarifies !== undefined;
           const clarifier = clarifyFor(card.cardId);
           return (
             <div key={`${card.cardId}-${card.drawOrder}`} className="flex w-24 shrink-0 flex-col sm:w-28">
