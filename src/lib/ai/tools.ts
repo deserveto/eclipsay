@@ -60,13 +60,26 @@ export function createTarotTools({ user }: { user: User | null }) {
   return {
     ask_user: tool({
       description:
-        'Ask the user one clarifying multiple-choice question before a reading. Use when their question is too vague to choose a spread; at most twice per reading.',
+        'Ask the user up to three grouped clarifying multiple-choice questions before a reading — one batch per reading request. Use only when their message is too vague to choose a spread; each question needs 2-5 answer options that would each change the reading. Set allowMultiple only when several options can truthfully apply.',
       inputSchema: z.object({
-        question: z.string().min(5).max(200),
-        options: z.array(z.string().min(1).max(80)).min(2).max(4),
+        questions: z
+          .object({
+            question: z.string().min(5).max(200),
+            options: z.array(z.string().min(1).max(80)).min(2).max(5),
+            allowMultiple: z.boolean(),
+          })
+          .array()
+          .min(1)
+          .max(3),
+        freeformLabel: z
+          .string()
+          .min(3)
+          .max(80)
+          .optional()
+          .describe("Label for the free-text 'write your own answer' field, phrased in the user's language (e.g. 'Type your own…')"),
       }),
       // Pure payload, PRD §62: the UI renders it; nothing is written here.
-      execute: async ({ question, options }) => ({ question, options }),
+      execute: async ({ questions, freeformLabel }) => ({ questions, freeformLabel }),
     }),
 
     recommend_reading: tool({

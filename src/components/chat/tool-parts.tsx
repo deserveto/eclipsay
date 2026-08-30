@@ -3,6 +3,7 @@
 import type { ToolUIPart } from 'ai';
 import type { ChatMessage } from '@/lib/chat/convert';
 import { DrawFailedCard } from '@/components/tarot/tarot-spread';
+import { DECLINE_CHOICE, isQuestionBatch, type ClarificationQuestion } from '@/components/chat/composer-clarification';
 export type SearchHit = { entryId: string; title: string; createdAt?: string };
 
 type ConfirmHandlers = {
@@ -15,13 +16,15 @@ type ConfirmHandlers = {
 };
 
 // Typed renderers for streamed tool parts (plan: Phase 2.7 / Phase 3).
-// The reading panel itself renders from the session readings store, keyed by
-// readingId — these parts only carry interaction affordances.
+// Assistant prose always renders first (chat-screen); these action surfaces
+// follow it. The reading panel itself renders from the session readings
+// store, keyed by readingId — these parts only carry interaction affordances.
 
 function RecommendationCard({
   part,
   declined,
   acted,
+  stale,
   onBeginReading,
   onDecline,
   markActed,
@@ -29,6 +32,7 @@ function RecommendationCard({
   part: ToolUIPart;
   declined: boolean;
   acted: boolean;
+  stale: boolean;
   onBeginReading: (spreadId: string) => void;
   onDecline: () => void;
   markActed: (toolCallId: string) => void;
@@ -46,95 +50,100 @@ function RecommendationCard({
       }
     | undefined;
   if (!output?.recommendedSpreadId || !output.title || output.error) return null;
+  const positions = output.positions ?? [];
+  const alternatives = output.alternatives ?? [];
   const begin = (spreadId: string) => {
     markActed(part.toolCallId);
     onBeginReading(spreadId);
   };
   return (
-    <div className="rounded-xl border border-border bg-card px-4 py-3">
-      <p className="text-xs font-medium tracking-wide text-primary uppercase">Reading suggestion</p>
-      <p className="mt-1 text-sm leading-6">{output.context}</p>
-      <p className="mt-0.5 text-xs text-muted-foreground">
-        A {output.cardCount}-card {output.title} — {output.positions?.join(' · ')}
-      </p>
-      <div className="mt-2.5 flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          disabled={acted}
-          className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-[color-mix(in_oklch,var(--primary),var(--foreground)_8%)] disabled:opacity-60"
-          onClick={() => begin(output.recommendedSpreadId!)}
-        >
-          {acted ? 'Reading started' : 'Begin reading'}
-        </button>
-        {!acted &&
-          (output.alternatives ?? []).map((alt) => (
-            <button
-              key={alt.spreadId}
-              type="button"
-              className="rounded-full bg-secondary px-3 py-1.5 text-xs transition-opacity hover:opacity-90"
-              onClick={() => begin(alt.spreadId)}
-            >
-              {alt.cardCount} {alt.cardCount === 1 ? 'card' : 'cards'} — {alt.title}
-            </button>
+    <div className="mystical rounded-2xl p-4 shadow-lg">
+      <p className="text-[11px] font-medium uppercase tracking-widest opacity-75">Reading suggestion</p>
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        <h3 className="text-base font-medium">{output.title}</h3>
+        <span className="rounded-full border border-white/25 px-2 py-0.5 text-[11px] opacity-90">
+          {output.cardCount} {output.cardCount === 1 ? 'card' : 'cards'}
+        </span>
+      </div>
+      {output.context && <p className="mt-1.5 text-sm leading-6 opacity-90">{output.context}</p>}
+      {positions.length > 0 && (
+        <ol className="mt-3 rounded-xl border border-white/15 bg-white/5 px-3.5 py-1.5">
+          {positions.map((position, i) => (
+            <li key={`${i}.${position}`} className="flex gap-2.5 py-1 text-sm leading-6">
+              <span className="w-4 shrink-0 text-right text-xs tabular-nums opacity-60">{i + 1}</span>
+              <span className="opacity-90">{position}</span>
+            </li>
           ))}
-        {!acted && (
+        </ol>
+      )}
+      {stale && !acted ? (
+        <p className="mt-3 text-xs opacity-75">Set aside — just ask if you&rsquo;d like this reading.</p>
+      ) : (
+        <div className="mt-3.5">
           <button
             type="button"
-            className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
-            onClick={onDecline}
+            disabled={acted}
+            className="rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-[color-mix(in_oklch,var(--primary),var(--foreground)_8%)] disabled:opacity-60"
+            onClick={() => begin(output.recommendedSpreadId!)}
           >
-            Not now
+            {acted ? 'Reading started' : 'Begin reading'}
           </button>
-        )}
-      </div>
+          {!acted && alternatives.length > 0 && (
+            <div className="mt-2.5 flex flex-wrap items-center gap-2">
+              <span className="text-xs opacity-75">Prefer a different depth?</span>
+              {alternatives.map((alt) => (
+                <button
+                  key={alt.spreadId}
+                  type="button"
+                  className="rounded-full border border-white/25 px-3 py-1 text-xs opacity-90 transition-colors hover:bg-white/10"
+                  onClick={() => begin(alt.spreadId)}
+                >
+                  {alt.cardCount} {alt.cardCount === 1 ? 'card' : 'cards'} — {alt.title}
+                </button>
+              ))}
+            </div>
+          )}
+          {!acted && (
+            <button
+              type="button"
+              className="mt-2.5 block text-xs text-white/70 underline underline-offset-4 hover:text-white"
+              onClick={onDecline}
+            >
+              Not now
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-function AskUserCard({
+// Non-docked ask_user parts render as settled history: a compact,
+// noninteractive record of what was asked. The live batch docks above the
+// composer instead (chat-screen), so its part renders nothing here.
+function AskUserHistory({
   part,
   acted,
-  onAnswer,
-  markActed,
+  stale,
 }: {
   part: ToolUIPart;
   acted: boolean;
-  onAnswer: (text: string) => void;
-  markActed: (toolCallId: string) => void;
+  stale: boolean;
 }) {
-  if (part.state !== 'output-available') {
-    return <p className="text-sm text-muted-foreground">Thinking it through…</p>;
-  }
-  const output = part.output as { question?: string; options?: string[] } | undefined;
-  if (!output?.question) return null;
-  const answer = (text: string) => {
-    markActed(part.toolCallId);
-    onAnswer(text);
-  };
+  if (part.state !== 'output-available') return null;
+  if (!isQuestionBatch(part.output)) return null; // pre-cutover payloads stay retired
+  const questions: ClarificationQuestion[] = part.output.questions;
+  const status = acted ? 'Answered' : stale ? 'Continued in chat' : null;
   return (
-    <div className="rounded-xl border border-border bg-card px-4 py-3">
-      <p className="text-[15px] leading-7">{output.question}</p>
-      <div className="mt-2.5 flex flex-wrap gap-2">
-        {(output.options ?? []).map((option) => (
-          <button
-            key={option}
-            type="button"
-            disabled={acted}
-            className="rounded-full border border-border bg-card px-3 py-1.5 text-sm transition-colors hover:border-primary/40 hover:bg-primary/10 disabled:opacity-50"
-            onClick={() => answer(option)}
-          >
-            {option}
-          </button>
-        ))}
-        <button
-          type="button"
-          disabled={acted}
-          className="rounded-full border border-border px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50"
-          onClick={() => answer("I'd rather not say")}
-        >
-          I&apos;d rather not say
-        </button>
-      </div>
+    <div className="rounded-xl border border-border bg-muted/40 px-3.5 py-2.5">
+      {questions.map((q) => (
+        <p key={q.question} className="text-xs leading-5 text-muted-foreground">
+          <span className="font-medium text-foreground/70">{q.question}</span>
+          <span className="mx-1.5">—</span>
+          {[...q.options, DECLINE_CHOICE].join(' · ')}
+        </p>
+      ))}
+      {status && <p className="mt-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">{status}</p>}
     </div>
   );
 }
@@ -276,16 +285,19 @@ function SearchJournalCard({
 export function ToolPartRenderer({
   message,
   declined,
+  stale,
+  dockedToolCallId,
   onBeginReading,
   onDecline,
-  onAnswerClarify,
   confirm,
 }: {
   message: ChatMessage;
   declined: boolean;
+  stale: boolean;
+  /** The live ask_user batch renders docked above the composer; it renders nothing here. */
+  dockedToolCallId?: string;
   onBeginReading: (spreadId: string) => void;
   onDecline: () => void;
-  onAnswerClarify: (text: string) => void;
   confirm: ConfirmHandlers;
 }) {
   return (
@@ -295,13 +307,13 @@ export function ToolPartRenderer({
         .map((part) => {
           switch (part.type) {
             case 'tool-ask_user':
+              if (part.toolCallId === dockedToolCallId) return null;
               return (
-                <AskUserCard
+                <AskUserHistory
                   key={part.toolCallId}
                   part={part}
                   acted={confirm.actedIds.has(part.toolCallId)}
-                  onAnswer={onAnswerClarify}
-                  markActed={confirm.markActed}
+                  stale={stale}
                 />
               );
             case 'tool-recommend_reading':
@@ -311,6 +323,7 @@ export function ToolPartRenderer({
                   part={part}
                   declined={declined}
                   acted={confirm.actedIds.has(part.toolCallId)}
+                  stale={stale}
                   onBeginReading={onBeginReading}
                   onDecline={onDecline}
                   markActed={confirm.markActed}

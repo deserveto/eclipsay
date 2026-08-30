@@ -17,12 +17,13 @@ import { toast } from 'sonner';
 import { TarotSpread, DrawFailedCard } from '@/components/tarot/tarot-spread';
 import { DrawBar } from '@/components/tarot/draw-bar';
 import { ToolPartRenderer, type SearchHit } from '@/components/chat/tool-parts';
+import { ComposerClarification } from '@/components/chat/composer-clarification';
 import { classify } from '@/lib/ai/safety';
 import { track } from '@/lib/analytics';
 import { useDataMode } from '@/hooks/use-data-mode';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import { appendMessage, getGuestSession, loadGuestStore, saveFollowUp, saveInsight as saveGuestInsight, saveMemory, saveReading, saveSession, updateMessageMeta } from '@/lib/guest/store';
-import { extractToolParts, joinUiText, storedToUi, type ChatMessage } from '@/lib/chat/convert';
+import { activeAskUserPart, extractToolParts, joinUiText, staleInteractiveMessageIds, storedToUi, type ChatMessage } from '@/lib/chat/convert';
 import { makeEntry } from '@/lib/journal/entries';
 import type { DrawnCard } from '@/lib/tarot/types';
 import type { MemoryCategory, StoredMessage, TarotReading } from '@/lib/types';
@@ -559,6 +560,18 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     setApprovedContext((prev) => prev.filter((c) => c.entryId !== entryId));
   };
 
+  // Interactive cards (reading suggestions, ask_user chips) retire once the
+  // user's next message lands (PRD §30): derived from transcript position so
+  // hydration reproduces the same state without persisted flags.
+  const staleInteractiveIds = useMemo(() => staleInteractiveMessageIds(chat.messages), [chat.messages]);
+
+  // The live ask_user batch docks above the composer (PRD §30); it appears
+  // only after streaming finishes, and answering (acted) or any later user
+  // message (stale) retires it.
+  const activeClarification = useMemo(
+    () => activeAskUserPart(chat.messages, staleInteractiveIds, actedConfirms),
+    [chat.messages, staleInteractiveIds, actedConfirms],
+  );
   const busy = chat.status === 'submitted' || chat.status === 'streaming';
   const failed = chat.status === 'error';
   const empty = chat.messages.length === 0;
@@ -692,12 +705,14 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
                 const messageText = joinUiText(message);
                 return (
                   <div key={message.id} className="group flex flex-col gap-2">
+                    <Markdown>{messageText}</Markdown>
                     <ToolPartRenderer
                       message={message}
                       declined={declinedToolCalls.has(message.id)}
+                      stale={staleInteractiveIds.has(message.id)}
+                      dockedToolCallId={activeClarification?.messageId === message.id ? activeClarification.part.toolCallId : undefined}
                       onBeginReading={(spreadId) => void beginReading(spreadId)}
                       onDecline={() => handleDeclined(message.id)}
-                      onAnswerClarify={(text) => send(text)}
                       confirm={{
                         actedIds: actedConfirms,
                         markActed: (toolCallId) => handleActed(message.id, toolCallId),
@@ -707,7 +722,6 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
                         onBringItIn: bringItIn,
                       }}
                     />
-                    <Markdown>{messageText}</Markdown>
                     {messageText.trim().length > 0 && (
                       <div>
                         <Button
@@ -785,7 +799,14 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
       )}
 
       <div className="bg-background/95 px-4 pt-2 pb-3">
-        <div className="mx-auto w-full max-w-2xl">
+        <div className="mx-auto flex w-full max-w-2xl flex-col gap-2">
+          {activeClarification && !busy && (
+            <ComposerClarification
+              part={activeClarification.part}
+              onSubmit={(text) => send(text)}
+              markActed={(toolCallId) => handleActed(activeClarification.messageId, toolCallId)}
+            />
+          )}
           <AiChatInput
             value={input}
             onValueChange={setInput}

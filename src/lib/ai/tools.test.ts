@@ -62,9 +62,30 @@ describe('recommend_reading', () => {
 });
 
 describe('ask_user', () => {
-  it('returns the payload unchanged', async () => {
-    const input = { question: 'What part of the decision feels heaviest?', options: ['Timing', 'Money', 'People'] };
+  it('returns the batch unchanged', async () => {
+    const input = {
+      questions: [
+        { question: 'What part of the decision feels heaviest?', options: ['Timing', 'Money', 'People'], allowMultiple: false },
+        { question: 'Which angles matter to you right now?', options: ['How I feel', 'Practical impact'], allowMultiple: true },
+      ],
+    };
     const output = (await exec(tools.ask_user, input)) as typeof input;
     expect(output).toEqual(input);
+    expect(output.questions).toHaveLength(2);
+  });
+
+  it('round-trips freeformLabel when provided and tolerates its absence', async () => {
+    const withLabel = {
+      questions: [{ question: 'What part of the decision feels heaviest?', options: ['Timing', 'Money'], allowMultiple: false }],
+      freeformLabel: 'Or write your own…',
+    };
+    expect((await exec(tools.ask_user, withLabel)) as unknown).toEqual(withLabel);
+
+    const withoutLabel = {
+      questions: [{ question: 'What part of the decision feels heaviest?', options: ['Timing', 'Money'], allowMultiple: false }],
+    };
+    const output = (await exec(tools.ask_user, withoutLabel)) as { questions: unknown[]; freeformLabel?: string };
+    expect(output.questions).toHaveLength(1);
+    expect(output.freeformLabel).toBeUndefined();
   });
 });

@@ -37,3 +37,40 @@ describe('buildSystemPrompt tarot event directives', () => {
     expect(prompt).not.toMatch(/Interpret exactly those cards now/);
   });
 });
+
+describe('buildSystemPrompt clarification contract', () => {
+  it('caps the batch at three questions, one batch per request', () => {
+    const prompt = buildSystemPrompt({ safety });
+    expect(prompt).toMatch(/ask_user at most once per reading request/);
+    expect(prompt).toMatch(/one batch of one to three questions/);
+    expect(prompt).toMatch(/never a second batch/);
+  });
+
+  it('permits zero questions when the intent is already clear', () => {
+    const prompt = buildSystemPrompt({ safety });
+    expect(prompt).toMatch(/no clarification tool at all when the reading intent is already clear/);
+  });
+
+  it('gates allowMultiple on truthful multi-answer questions', () => {
+    const prompt = buildSystemPrompt({ safety });
+    expect(prompt).toMatch(/allowMultiple: true on a question only when more than one option can truthfully apply/);
+  });
+
+  it('requires prose before the tool call and bans re-interrogation', () => {
+    const prompt = buildSystemPrompt({ safety });
+    expect(prompt).toMatch(/never the bare tool call with no prose/);
+    expect(prompt).toMatch(/name the assumption once/);
+  });
+
+  it('keeps one-question-at-a-time as the default with the batch as the lone exception', () => {
+    const prompt = buildSystemPrompt({ safety });
+    expect(prompt).toMatch(/Ask one question at a time, and only when it genuinely moves the reflection forward\./);
+    expect(prompt).toMatch(/may group up to three structured questions into a single batch/);
+  });
+
+  it('requires a user-language freeform label for the custom answer field', () => {
+    const prompt = buildSystemPrompt({ safety });
+    expect(prompt).toMatch(/Always set freeformLabel/);
+    expect(prompt).toMatch(/phrased in the person's language/);
+  });
+});

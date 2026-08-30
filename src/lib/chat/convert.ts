@@ -45,3 +45,43 @@ export function joinUiText(message: ChatMessage): string {
     .map((part) => part.text)
     .join('');
 }
+
+// Interactive tool cards (reading suggestions, ask_user chips) are live only
+// until the user's next message (PRD §30); anything earlier is inert history.
+// Derived from transcript position — never persisted, never model-driven — so
+// live streaming and hydration reproduce the same state for free.
+export function staleInteractiveMessageIds(messages: ReadonlyArray<{ id: string; role: string }>): Set<string> {
+  let lastUserIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') {
+      lastUserIndex = i;
+      break;
+    }
+  }
+  if (lastUserIndex === -1) return new Set();
+  return new Set(messages.slice(0, lastUserIndex).filter((m) => m.role === 'assistant').map((m) => m.id));
+}
+
+// The live ask_user batch docks above the composer (PRD §30): newest
+// output-available assistant part that is neither stale (a later user message
+// exists) nor already answered. Malformed payloads stay the component's
+// concern — this only finds the newest plausible part.
+export function activeAskUserPart(
+  messages: ChatMessage[],
+  staleMessageIds: Set<string>,
+  actedToolCallIds: Set<string>,
+): { messageId: string; part: ToolUIPart } | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== 'assistant' || staleMessageIds.has(message.id)) continue;
+    for (const part of message.parts) {
+      if (part.type !== 'tool-ask_user') continue;
+      // Union member is `tool-${string}`; the equality check fixes the
+      // variant, but the compiler cannot narrow it — one reasoned cast.
+      const toolPart = part as ToolUIPart;
+      if (toolPart.state !== 'output-available' || actedToolCallIds.has(toolPart.toolCallId)) continue;
+      return { messageId: message.id, part: toolPart };
+    }
+  }
+  return null;
+}

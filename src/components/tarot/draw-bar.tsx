@@ -86,58 +86,77 @@ export function DrawBar({
         closing ? 'translate-y-6 opacity-0' : 'translate-y-0 opacity-100'
       } animate-[eclipsay-rise-in_250ms_ease-out] motion-reduce:animate-none`}
     >
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="text-sm font-medium tracking-wide uppercase opacity-90">
-          Choose {total} card{total > 1 ? 's' : ''}
-        </h3>
-        <div className="flex items-center gap-3">
-          <p className="text-[11px] opacity-75" aria-live="polite">
-            {revealedCount}/{total}
-          </p>
-          <button
-            type="button"
-            className="rounded-md px-2 py-1 text-xs text-white/70 underline underline-offset-4 hover:text-white"
-            onClick={onCancel}
-          >
-            Cancel
-          </button>
+      {/* Region 1 — spread positions: every slot visible up front; the next
+          slot is highlighted; revealed slots carry the server-fixed card. */}
+      <div aria-label="Reading positions" className="rounded-xl border border-white/15 bg-white/5 p-3">
+        <h3 className="text-xs font-medium uppercase tracking-widest opacity-75">Reading positions</h3>
+        <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
+          {cards.map((card, i) => {
+            const isNext = i === revealedCount && revealedCount < total;
+            const revealed = i < revealedCount;
+            return (
+              <div key={card.drawOrder} className="flex w-14 shrink-0 flex-col">
+                <div
+                  className={`relative h-24 w-14 overflow-hidden rounded-lg shadow-lg ${
+                    isNext
+                      ? 'border border-white/60 [box-shadow:0_0_0_1px_oklch(0.62_0.07_285/0.5),0_0_20px_oklch(0.5_0.08_285/0.35)]'
+                      : 'border border-white/20'
+                  }`}
+                >
+                  {revealed ? (
+                    /* eslint-disable-next-line @next/next/no-img-element */
+                    <img
+                      src={`/cards/rws/${card.cardId}.jpg`}
+                      alt={`${card.name}, ${card.orientation}`}
+                      draggable={false}
+                      className={`h-full w-full animate-[eclipsay-rise-in_250ms_ease-out] object-cover motion-reduce:animate-none ${
+                        card.orientation === 'reversed' ? 'rotate-180' : ''
+                      }`}
+                    />
+                  ) : (
+                    <span className="absolute inset-0 grid place-items-center text-sm opacity-40">{i + 1}</span>
+                  )}
+                </div>
+                <p className="mt-1 truncate text-[9px] uppercase tracking-wide opacity-75" title={card.position}>
+                  {card.position}
+                </p>
+                {revealed && (
+                  <p className="truncate text-[10px] opacity-90" title={card.name}>
+                    {card.name}
+                  </p>
+                )}
+                {revealed && card.orientation === 'reversed' && (
+                  <span className="mt-0.5 w-fit rounded border border-white/30 px-1 py-px text-[9px] uppercase opacity-80">
+                    Reversed
+                  </span>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 
-      <div className="flex items-start gap-4">
-        {/* Drawn row: position-labeled slots the flipped cards glide into. */}
-        <div className="flex shrink-0 gap-2">
-          {cards.map((card, i) => (
-            <div key={card.drawOrder} className="flex w-14 flex-col">
-              <div className="relative h-24 w-14 overflow-hidden rounded-lg border border-white/20 shadow-lg">
-                {i < revealedCount && (
-                  /* eslint-disable-next-line @next/next/no-img-element */
-                  <img
-                    src={`/cards/rws/${card.cardId}.jpg`}
-                    alt={`${card.name}, ${card.orientation}`}
-                    draggable={false}
-                    className={`h-full w-full animate-[eclipsay-rise-in_250ms_ease-out] object-cover motion-reduce:animate-none ${
-                      card.orientation === 'reversed' ? 'rotate-180' : ''
-                    }`}
-                  />
-                )}
-              </div>
-              <p className="mt-1 truncate text-[9px] uppercase tracking-wide opacity-75" title={card.position}>
-                {card.position}
-              </p>
-              {i < revealedCount && card.orientation === 'reversed' && (
-                <span className="mt-0.5 w-fit rounded border border-white/30 px-1 py-px text-[9px] uppercase opacity-80">
-                  Reversed
-                </span>
-              )}
-            </div>
-          ))}
+      {/* Region 2 — face-down deck: picking a back only sequences the reveal;
+          identities stay server-fixed and fill the next position. */}
+      <div aria-label="Choose from the deck" className="mt-3">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-xs font-medium uppercase tracking-widest opacity-75">Choose from the deck</h3>
+          <div className="flex items-center gap-3">
+            <p className="text-[11px] opacity-75" aria-live="polite">
+              {revealedCount}/{total} selected
+            </p>
+            <button
+              type="button"
+              className="rounded-md px-2 py-1 text-xs text-white/70 underline underline-offset-4 hover:text-white"
+              onClick={onCancel}
+            >
+              Cancel
+            </button>
+          </div>
         </div>
+        <p className="mt-0.5 text-[11px] opacity-75">Tap any face-down card. Each choice fills the next position.</p>
 
-        {/* Face-down fan; one click per card. Feedback stays inside the card
-            bounds (scale + glow): the scroll container clips translated
-            cards, since overflow-x implies overflow-y clipping. */}
-        <div className="flex flex-1 gap-1.5 overflow-x-auto pb-1">
+        <div className="mt-2 flex gap-1.5 overflow-x-auto pb-1">
           {Array.from({ length: fanSize }, (_, i) => {
             const isUsed = used.has(i);
             const isFlipping = flipping?.fanIndex === i;
@@ -180,6 +199,8 @@ export function DrawBar({
           })}
         </div>
       </div>
+
+      <p className="mt-3 text-[10px] opacity-60">Illustrations: Pamela Colman Smith (1909), public domain.</p>
     </section>
   );
 }

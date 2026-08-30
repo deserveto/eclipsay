@@ -932,6 +932,12 @@ The app draws the cards in its docked Interactive Draw bar — the AI never draw
 
 The AI should not re-recommend tarot after a decline unless the user asks for cards again.
 
+When the request is too vague to choose a spread, the AI asks structured clarifying questions through at most one `ask_user` batch per reading request — never a second batch. A clear request produces zero questions; one material gap produces one question; at most three distinct, decision-changing questions are grouped into the single batch, and multi-select answers are allowed only where several options can truthfully apply. The app renders the batch as a composer-attached progressive panel (one question at a time, an "I'd rather not say" choice on every question); the answers return to the conversation as one ordinary user message. After the batch — answered or declined — the AI proceeds without asking again, naming any assumption it makes.
+
+The panel always offers a free-text "write your own answer" field alongside the options. The model supplies its label (`freeformLabel`) phrased in the user's language, so the invitation to type a custom answer reads naturally in whatever language the conversation is in; the app falls back to an English label if the model omits it. A typed answer obeys the same rules as a chosen option (mutually exclusive with "I'd rather not say"; replaces on single-select; adds on multi-select) and flows into the answer message verbatim.
+
+A suggestion card stays actionable only until the user's next message; earlier suggestions render as set-aside history, and the user can ask for a reading again at any time.
+
 ---
 
 # 31. Basic Spread Library
@@ -1597,6 +1603,8 @@ create_followup()
 ```
 
 Draws are app-initiated via the draw service — the model never draws cards.
+
+`ask_user` carries one batch of one to three structured questions (each with 2–5 options and an app-controlled multi-select flag). It is a pure payload: the app renders it as a composer-attached clarification panel, and the user's answers re-enter the conversation as one normal message. A clear request yields no batch at all, and at most one batch is ever issued per reading request.
 
 The LLM decides when a tool might help.
 

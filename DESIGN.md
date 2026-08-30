@@ -246,7 +246,7 @@ After hours, the same warm family dims to charcoal: warm neutral surfaces, warm 
 
 ### Hierarchy
 - **Display** (500, 36→48px, line-height 1.1, tracking −2.5%): The landing question "What's on your mind?" — one per surface, never repeated in-app.
-- **Title** (500, 16px, line-height 1.375): Card titles, dialog headings, ceremony phase titles (18px inside mystical panels).
+- **Title** (500, 16px, line-height 1.375): Card titles, dialog headings (18px inside mystical panels).
 - **Body** (400, 14px, line-height 1.45): The default for everything — chat, descriptions, nav labels, buttons (buttons add weight 500). 14px is the base size, not 16px.
 - **Label** (500, 12px, tracking +2.5%): Badges, micro-buttons; uppercase + wide tracking is reserved for the wordmark "ECLIPSAY" and spread titles.
 - **Micro** (500, 11px, line-height 1.2): Tarot panel position and card names; the 9–10px uppercase "Reversed" badge and clarify buttons live at the floor of the scale.
@@ -261,20 +261,20 @@ A persistent sidebar (desktop ≥ md) holds navigation and recent sessions; cont
 
 ## Elevation & Depth
 
-Flat by default. Surfaces separate by tone and 1px hairline rings, never resting shadows. A box-shadow must be earned: physical objects (tarot cards) get `shadow-lg`, overlays (the draw ceremony) get `shadow-2xl`, and mystical focus earns a glow ring. Interaction adds motion, not depth: clickable landing cards lift 2px on hover; buttons press down 1px on click.
+Flat by default. Surfaces separate by tone and 1px hairline rings, never resting shadows. A box-shadow must be earned: physical objects (tarot cards) get `shadow-lg`, docked mystical surfaces (the draw bar, the reading recommendation) get `shadow-lg` as floating app chrome, and mystical focus earns a glow ring. Interaction adds motion, not depth: clickable landing cards lift 2px on hover; buttons press down 1px on click.
 
 ### Shadow Vocabulary
 - **Hairline ring** (`ring-1` at `oklch(0.24 0.014 70 / 0.1)`): The default card/separator treatment — a drawn line, not a cast shadow.
 - **Card physicality** (`box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)`): Tarot cards only, face and back.
-- **Overlay** (`shadow-2xl`): The draw-ceremony modal only.
-- **Mystical glow ring** (`box-shadow: 0 0 0 1px oklch(0.62 0.07 285 / 0.35), 0 0 24px oklch(0.5 0.08 285 / 0.25)`): Chosen cards in the ceremony; tarot focus moments.
+- **Overlay** (`shadow-xl`/`shadow-2xl`): True modal dialogs only (sign-in, check-in, detail).
+- **Mystical glow ring** (`box-shadow: 0 0 0 1px oklch(0.62 0.07 285 / 0.35), 0 0 24px oklch(0.5 0.08 285 / 0.25)`): Chosen backs and the highlighted next slot in the draw bar; tarot focus moments.
 
 ### Named Rules
 **The Ring, Not Shadow Rule.** At rest, surfaces separate by 1px hairline rings (ink at 10%) or tone steps — never by cast shadow. Shadows are earned by physicality or overlay, and a hover may lift (translate) but not cast.
 
 ## Shapes
 
-A gentle, consistent radius ladder scales from a 10px base (`--radius: 0.625rem`): 6 / 8 / 10 / 14 / 18 / 22 / 26px, plus full pill. Controls use 10px (`rounded-lg`), nav items 8px, cards 14px, mystical panels 18px, badges and chips and switches full pill. Edges are 1px strokes in Clay Path; inside mystical surfaces strokes switch to white-alpha (`white/20–30`) so lines read as moonlight, not ink. Tarot cards hold a tall 2:3.4 aspect (`aspect-[2/3.4]`) with 3D flip perspective (900px); the ceremony fan uses a narrower card (56×96px). Icons are Lucide at 16px inline (18px in feature tiles), never decorative flourishes.
+A gentle, consistent radius ladder scales from a 10px base (`--radius: 0.625rem`): 6 / 8 / 10 / 14 / 18 / 22 / 26px, plus full pill. Controls use 10px (`rounded-lg`), nav items 8px, cards 14px, mystical panels 18px, badges and chips and switches full pill. Edges are 1px strokes in Clay Path; inside mystical surfaces strokes switch to white-alpha (`white/20–30`) so lines read as moonlight, not ink. Tarot cards hold a tall 2:3.4 aspect (`aspect-[2/3.4]`) with 3D flip perspective (900px); the draw bar's deck fan uses a narrower card (56×96px).
 
 ## Components
 
@@ -304,8 +304,13 @@ Sidebar links: 8px radius, 6×12px padding, 14px text, 16px Lucide icon, 2px ver
 ### Signature: Tarot Reading Panel
 The one place the night enters. An 18px-radius `.mystical` panel: two veiled radial glows over a Dusk-to-Night 175° gradient, Moonpaper text. Uppercase wide-tracked 14px spread title at 90% opacity; "Reveal all" and "Clarify" micro-buttons are white-alpha outlined ghosts (`white/25` border, hover `white/10` fill). Cards deal face-down in a horizontally scrolling row (96→112px wide, 2:3.4, 16–20px gaps), then flip in sequence — first reveal at 500ms, +550ms per card, 700ms 3D rotateY per flip, instant under `prefers-reduced-motion`. Backs are `.mystical-card-back` (twin radial glows over 160° gradient) with `white/20` border; faces are the RWS image, `object-cover`, rotated 180° when reversed — always paired with the uppercase 9px "Reversed" text badge, never color alone. Alt text follows `"<name>, <orientation>"` (PRD §65). Attribution "Pamela Colman Smith (1909), public domain" accompanies card art (PRD §27).
 
-### Signature: Interactive Draw Ceremony
-Full-screen `black/50` scrim; centered mystical panel (`max-w-lg`, 18px radius, 24px padding, `shadow-2xl`). Phases run Focus → Shuffle → Cut → Choose (shuffle holds 1600ms; 150ms when motion is reduced). The Choose fan lays out `count + 8` card backs (56×96px, 10px radius, `white/25` borders); hover lifts 4px, chosen lifts 8px and takes the Wisp glow ring with `white/60` border; selection is `aria-pressed`, fan disables at quota. Cancel is a quiet underlined `white/70` link.
+### Signature: Docked Draw Bar
+The draw happens in a docked `.mystical` bar directly above the composer — never a full-screen dialog. Two stacked white-alpha insets (1px `white/15` rings on `white/5` fills) separate the two decisions: **Reading positions**, a numbered row of non-clickable slots that shows every spread position up front, highlights the next open slot with the Wisp glow ring, and fills it with the fixed RWS face, position label, card name, and "Reversed" badge as picks land; and **Choose from the deck**, helper copy ("Tap any face-down card. Each choice fills the next position."), live `{revealed}/{total} selected` progress, and the horizontally scrolling face-down fan (`count + 4` backs, 56×96px, 10px radius, `white/25` borders). Hover lifts glow; a chosen back flips 700ms in place (`aria-pressed`) while the position slot takes the card; the fan disables at quota; reduced motion skips straight to completion. Cancel is a quiet underlined `white/70` link, and the bar carries the attribution line "Illustrations: Pamela Colman Smith (1909), public domain."
+
+### Signature: Composer Clarification Panel
+Clarifying questions never interrupt the transcript as a modal — they dock as a Paper White panel directly above the composer, in document flow, rising 10px with a 250ms fade (instant under `prefers-reduced-motion`). 22px radius, hairline Clay Path ring, flat (ring, not shadow). A compact uppercase 12px header carries `Question N of M` beside the per-question instruction ("Choose one" / "Select all that apply"); the question itself is set at Chat Reading size. Answers are full-width pill-radius rows that press into the copper tint (`primary/10` fill, copper text, copper border) — the only copper in the panel besides the `Send answers` primary. "I'd rather not say" is a quieter outlined row; Back is a ghost; Next is secondary; one question shows at a time.
+
+Between the option rows and the "I'd rather not say" escape sits an always-visible free-text field — the model's localized `freeformLabel` as placeholder and accessible name (English "Type your own…" fallback). Typing presses it into the same copper-tint treatment as a chosen option; erasing it releases the answer.
 
 ## Do's and Don'ts
 
@@ -315,7 +320,7 @@ Full-screen `black/50` scrim; centered mystical panel (`max-w-lg`, 18px radius, 
 - **Do** restrict copper to primary actions, active tints, links, and the live pulse — one voice per glance.
 - **Do** scope `.mystical` classes to tarot surfaces only; the base app stays warm — Lamplit paper by day, warm-neutral charcoal after hours.
 - **Do** pair every reversed card with its uppercase text badge, and set card alt text to `"<name>, <orientation>"`.
-- **Do** make every animation resolve instantly under `prefers-reduced-motion` (ceremony ceiling: 150ms).
+- **Do** make every animation resolve instantly under `prefers-reduced-motion` (docked-bar and panel entrances: 250ms or instant).
 - **Do** set destructive states as a 10% Ember wash with Ember text, behind `window.confirm` for destructive actions.
 
 ### Don't:
