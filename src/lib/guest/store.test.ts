@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   appendMessage,
   clearGuestData,
+  deleteGuestSession,
   emptyGuestStore,
   getGuestSession,
+  renameGuestSession,
   saveGuestProfile,
   loadGuestStore,
   saveInsight,
@@ -145,5 +147,30 @@ describe('guest memory flag', () => {
     expect(loadGuestStore(storage).profile.memoryEnabled).toBe(false);
     saveGuestProfile({ memoryEnabled: true }, storage);
     expect(loadGuestStore(storage).profile.memoryEnabled).toBe(true);
+  });
+});
+
+describe('session rename and delete', () => {
+  const isolated = new MemoryStorage();
+
+  it('renames a session without touching its position or timestamps', () => {
+    saveSession({ ...session, updated_at: '2026-01-02T00:00:00.000Z' }, isolated);
+    renameGuestSession('s1', 'The stuck decision', isolated);
+    const renamed = getGuestSession('s1', isolated);
+    expect(renamed?.title).toBe('The stuck decision');
+    expect(renamed?.updated_at).toBe('2026-01-02T00:00:00.000Z');
+  });
+
+  it('removes only the targeted session', () => {
+    saveSession({ ...session, id: 's2', title: 'Second' }, isolated);
+    deleteGuestSession('s2', isolated);
+    expect(getGuestSession('s2', isolated)).toBeUndefined();
+    expect(getGuestSession('s1', isolated)?.title).toBe('The stuck decision');
+  });
+
+  it('ignores renames and deletes for unknown sessions', () => {
+    renameGuestSession('missing', 'Nope', isolated);
+    deleteGuestSession('missing', isolated);
+    expect(getGuestSession('s1', isolated)).toBeDefined();
   });
 });

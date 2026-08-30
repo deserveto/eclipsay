@@ -24,14 +24,12 @@ import { useDataMode } from '@/hooks/use-data-mode';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import { appendMessage, getGuestSession, loadGuestStore, saveFollowUp, saveInsight as saveGuestInsight, saveMemory, saveReading, saveSession, updateMessageMeta } from '@/lib/guest/store';
 import { activeAskUserPart, extractToolParts, joinUiText, staleInteractiveMessageIds, storedToUi, type ChatMessage } from '@/lib/chat/convert';
+import { generateSessionTitle } from '@/lib/chat/session-actions';
+import { titleFrom } from '@/lib/chat/title';
 import { makeEntry } from '@/lib/journal/entries';
 import type { DrawnCard } from '@/lib/tarot/types';
 import type { MemoryCategory, StoredMessage, TarotReading } from '@/lib/types';
 
-function titleFrom(text: string): string {
-  const compact = text.replace(/\s+/g, ' ').trim();
-  return compact.length === 0 ? 'New Reflection' : compact.slice(0, 48);
-}
 type GuestMemoryPayload = { enabled: boolean; items: { category: string; content: string }[] };
 
 // Contract with POST /api/chat (guest mode only): guestMemory carries the
@@ -68,6 +66,12 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   const searchParams = useSearchParams();
   const [input, setInput] = useState('');
   const lastSent = useRef('');
+  // First exchange of a fresh session (captured at send time, consumed at
+  // stream finish): drives one-shot AI title generation. `firstTitle` is
+  // the guest compare-and-swap guard — only replace the placeholder the
+  // store actually holds, never a user's rename.
+  const firstUserText = useRef<string | null>(null);
+  const firstTitle = useRef<string | undefined>(undefined);
 
   // Stable per-screen session id; a deep link reuses the existing session.
   const sessionId = useMemo(() => initialSessionId ?? crypto.randomUUID(), [initialSessionId]);
@@ -140,9 +144,20 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
         meta: { ...(event.message.metadata ?? {}), ...(tools.length > 0 ? { tools } : {}) },
         created_at: new Date().toISOString(),
       });
+      // One-shot title generation after the very first assistant reply.
+      // Fire-and-forget: a failed or rejected title keeps the placeholder.
+      const firstText = firstUserText.current;
+      if (firstText !== null) {
+        firstUserText.current = null;
+        const replyText = joinUiText(event.message).trim();
+        if (replyText.length > 0) {
+          const expectedTitle = firstTitle.current;
+          firstTitle.current = undefined;
+          void generateSessionTitle({ sessionId, mode, userText: firstText, assistantText: replyText, expectedTitle });
+        }
+      }
     },
   });
-
   // Hydrate transcript + readings on deep link (never re-generate, PRD §26).
   useEffect(() => {
     const hydrate = async () => {
@@ -300,6 +315,13 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   const send = (text: string, metadata?: ChatMessage['metadata']) => {
     const trimmed = text.trim();
     if (trimmed.length === 0) return;
+    // Fresh session: remember this exchange so the first assistant reply can
+    // trigger one-shot title generation. The guest CAS guard is the title the
+    // store holds right now (before ensureGuestSession writes the placeholder).
+    if (chat.messages.length === 0) {
+      firstUserText.current = trimmed;
+      firstTitle.current = getGuestSession(sessionId)?.title ?? titleFrom(trimmed);
+    }
     // A previous failed generation leaves status 'error'; clear it so the
     // user can keep reflecting (their message must never be swallowed).
     const fullMetadata = {
@@ -310,7 +332,11 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     // the store-change merge dedupes by id, so the persisted row can never
     // re-import as a second transcript copy of the same message.
     const messageId = crypto.randomUUID();
-    const attempt = () => chat.sendMessage({ text: trimmed, metadata: fullMetadata, messageId });
+    // ai@7: a full CreateUIMessage passes through verbatim, keeping our id
+    // (shared with the guest-store row below). The old { text, messageId }
+    // shape now means "edit the message with this id" and throws.
+    const attempt = () =>
+      chat.sendMessage({ id: messageId, role: 'user', parts: [{ type: 'text', text: trimmed }], metadata: fullMetadata });
     if (chat.status === 'error') {
       chat.clearError();
       setTimeout(attempt, 80);

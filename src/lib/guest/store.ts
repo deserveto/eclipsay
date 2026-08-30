@@ -193,6 +193,14 @@ export function deleteJournalEntry(id: string, storage?: Storage): void {
   }, storage);
 }
 
+export function renameGuestSession(id: string, title: string, storage?: Storage): void {
+  mutate((store) => {
+    const session = store.sessions.find((s) => s.id === id);
+    if (!session) return;
+    session.title = title;
+  }, storage);
+}
+
 export function deleteGuestSession(id: string, storage?: Storage): void {
   mutate((store) => {
     store.sessions = store.sessions.filter((s) => s.id !== id);

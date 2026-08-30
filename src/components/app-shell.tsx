@@ -5,23 +5,9 @@ import { usePathname } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import { Brain, Compass, Menu, NotebookPen, PanelLeft, PanelLeftClose, Plus, Settings, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { ThemeToggle } from '@/components/theme-toggle';
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
-import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import { FollowUpBanner } from '@/components/followups/followup-banner';
-import { useDataMode } from '@/hooks/use-data-mode';
-import { loadGuestStore } from '@/lib/guest/store';
-
-function recentLabel(iso: string): string {
-  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m`;
-  if (mins < 1440) return `${Math.round(mins / 60)}h`;
-  const days = Math.round(mins / 1440);
-  if (days < 7) return `${days}d`;
-  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
-
+import { RecentSessions } from '@/components/sessions/recent-sessions';
 
 const navItems = [
   { href: '/journal', label: 'Journal', icon: NotebookPen },
@@ -33,69 +19,6 @@ const accountItems = [
   { href: '/profile', label: 'Profile', icon: User },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
-function RecentSessions({ onNavigate }: { onNavigate?: () => void }) {
-  const { mode } = useDataMode();
-  const pathname = usePathname();
-  const [sessions, setSessions] = useState<{ id: string; title: string; updated_at: string }[]>([]);
-
-  useEffect(() => {
-    if (mode === 'account' && isSupabaseConfigured()) {
-      const supabase = createClient();
-      let cancelled = false;
-      supabase
-        .from('reflection_sessions')
-        .select('id, title, updated_at')
-        .order('updated_at', { ascending: false })
-        .limit(20)
-        .then(({ data }) => {
-          if (!cancelled) setSessions((data ?? []) as { id: string; title: string; updated_at: string }[]);
-        });
-      return () => {
-        cancelled = true;
-      };
-    }
-    const read = () => {
-      const store = loadGuestStore();
-      setSessions(
-        [...store.sessions]
-          .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-          .slice(0, 20)
-          .map((s) => ({ id: s.id, title: s.title, updated_at: s.updated_at })),
-      );
-    };
-    read();
-    window.addEventListener('eclipsay:guest-store-changed', read);
-    return () => window.removeEventListener('eclipsay:guest-store-changed', read);
-  }, [mode]);
-
-  if (sessions.length === 0) return null;
-  return (
-    <div className="flex flex-col gap-0.5">
-      <p className="px-3 pb-1 text-[0.6875rem] font-medium uppercase tracking-[0.06em] text-muted-foreground">Recent</p>
-      {sessions.map((s) => {
-        const href = `/reflect/${s.id}`;
-        const current = pathname === href;
-        return (
-          <Link
-            key={s.id}
-            href={href}
-            onClick={onNavigate}
-            aria-current={current ? 'page' : undefined}
-            className={`flex items-baseline justify-between gap-2 rounded-lg px-3 py-1.5 text-sm transition-colors ${
-              current
-                ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-            }`}
-          >
-            <span className="truncate">{s.title}</span>
-            <span className="shrink-0 text-xs tabular-nums opacity-70">{recentLabel(s.updated_at)}</span>
-          </Link>
-        );
-      })}
-    </div>
-  );
-}
-
 function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   return (
@@ -242,7 +165,6 @@ export function AppShell({ children }: { children: ReactNode }) {
               ))}
             </nav>
             <div className="mt-auto flex flex-col items-center gap-1">
-              <ThemeToggle side="right" align="end" />
               {accountItems.map(({ href, label, icon: Icon }) => (
                 <Link
                   key={href}
@@ -282,7 +204,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                 >
                   <PanelLeftClose className="size-4" aria-hidden />
                 </Button>
-                <ThemeToggle />
               </div>
             </div>
             <SidebarInner />
@@ -313,7 +234,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             <img src="/logo.webp" alt="" className="size-6" />
             Eclipsay
           </Link>
-          <ThemeToggle className="ml-auto" />
         </header>
         <main id="main-content" tabIndex={-1} className="min-h-0 flex-1 overflow-y-auto focus:outline-none">
           {children}
