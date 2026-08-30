@@ -3,16 +3,11 @@
 import { useEffect, useState } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { clearGuestData, loadGuestStore } from '@/lib/guest/store';
+import { clearGuestData, guestStoreHasData, loadGuestStore } from '@/lib/guest/store';
 import { track } from '@/lib/analytics';
 import { toast } from 'sonner';
 
 const MIGRATION_PROMPT_KEY = 'eclipsay.migration.prompt.v1';
-
-function guestStoreHasData(): boolean {
-  const store = loadGuestStore();
-  return store.sessions.length > 0 || store.journal.length > 0 || store.insights.length > 0 || store.memories.length > 0;
-}
 
 // Post-verify migration prompt (plan: Accounts; PRD §13, §64).
 // Local data is cleared ONLY after the server confirms the import (200).

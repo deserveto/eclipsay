@@ -9,7 +9,9 @@ export type TarotFamiliarity = 'new' | 'some' | 'very';
 
 export type Profile = {
   id: string;
+  full_name: string | null;
   display_name: string | null;
+  date_of_birth: string | null;
   reflection_goal: ReflectionGoal | null;
   tarot_familiarity: TarotFamiliarity | null;
   memory_enabled: boolean;

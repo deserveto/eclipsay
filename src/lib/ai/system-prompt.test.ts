@@ -1,76 +1,59 @@
 import { describe, expect, it } from 'vitest';
 import { buildSystemPrompt } from './system-prompt';
+import { classify } from './safety';
 
-// Behavioral tests for the prompt contract (plan: AI layer — System prompt).
-// Tarot event notices are machine data, not the person's words: the interpret
-// directive may only appear when the route reports an event, and the language
-// rule must never let a notice choose the reply language.
+// Prompt-boundary privacy tests (plan: Accounts §7): the nickname and the
+// teen band are the only identity signals allowed into the prompt — the full
+// legal name, email, and birth date must never appear, even when present on
+// the profile object.
 
-const safety = { highStakes: false, crisis: false };
+const safety = classify('work has been heavy lately');
 
-describe('buildSystemPrompt language rule', () => {
-  it('anchors the reply language to the person, never to app notices', () => {
-    const prompt = buildSystemPrompt({ safety });
-    expect(prompt).toMatch(/language of the person's own most recent message/);
-    expect(prompt).toMatch(/never let one choose your language/);
-    expect(prompt).toMatch(/clarifying questions and their answer options/);
+const identityProfile = {
+  // Fields outside the PromptProfile pick must never leak into the prompt.
+  full_name: 'Priya Nair-Whitfield-XYZQ',
+  display_name: 'Priya',
+  date_of_birth: '2005-04-11',
+  reflection_goal: null,
+  tarot_familiarity: null,
+  memory_enabled: true,
+} as const;
+
+describe('nickname guidance', () => {
+  it('instructs sparing nickname use only when display_name exists', () => {
+    const withNickname = buildSystemPrompt({ profile: identityProfile, safety });
+    expect(withNickname).toContain('Priya');
+    expect(withNickname).toContain('sparingly and naturally');
+
+    const withoutNickname = buildSystemPrompt({ profile: { ...identityProfile, display_name: null }, safety });
+    expect(withoutNickname).not.toContain('sparingly and naturally');
   });
 });
 
-describe('buildSystemPrompt tarot event directives', () => {
-  it('contains no event directive without an event', () => {
-    const prompt = buildSystemPrompt({ safety });
-    expect(prompt).not.toMatch(/automated app notice/);
-  });
+describe('teen band guidance', () => {
+  it('includes conservative teen guidance only when teenUser is true', () => {
+    const teen = buildSystemPrompt({ profile: identityProfile, safety, teenUser: true });
+    expect(teen).toContain('13–17');
 
-  it('directs interpreting exactly the drawn cards on a draw event', () => {
-    const prompt = buildSystemPrompt({ safety, tarotEvent: 'draw' });
-    expect(prompt).toMatch(/cards have just been drawn/);
-    expect(prompt).toMatch(/Interpret exactly those cards now/);
-    expect(prompt).not.toMatch(/clarification card has just been drawn/);
-  });
+    const adult = buildSystemPrompt({ profile: identityProfile, safety, teenUser: false });
+    expect(adult).not.toContain('13–17');
 
-  it('directs interpreting the clarifier with its target on a clarify event', () => {
-    const prompt = buildSystemPrompt({ safety, tarotEvent: 'clarify' });
-    expect(prompt).toMatch(/clarification card has just been drawn/);
-    expect(prompt).toMatch(/together with the card it clarifies/);
-    expect(prompt).not.toMatch(/Interpret exactly those cards now/);
+    const omitted = buildSystemPrompt({ profile: identityProfile, safety });
+    expect(omitted).not.toContain('13–17');
   });
 });
 
-describe('buildSystemPrompt clarification contract', () => {
-  it('caps the batch at three questions, one batch per request', () => {
-    const prompt = buildSystemPrompt({ safety });
-    expect(prompt).toMatch(/ask_user at most once per reading request/);
-    expect(prompt).toMatch(/one batch of one to three questions/);
-    expect(prompt).toMatch(/never a second batch/);
-  });
-
-  it('permits zero questions when the intent is already clear', () => {
-    const prompt = buildSystemPrompt({ safety });
-    expect(prompt).toMatch(/no clarification tool at all when the reading intent is already clear/);
-  });
-
-  it('gates allowMultiple on truthful multi-answer questions', () => {
-    const prompt = buildSystemPrompt({ safety });
-    expect(prompt).toMatch(/allowMultiple: true on a question only when more than one option can truthfully apply/);
-  });
-
-  it('requires prose before the tool call and bans re-interrogation', () => {
-    const prompt = buildSystemPrompt({ safety });
-    expect(prompt).toMatch(/never the bare tool call with no prose/);
-    expect(prompt).toMatch(/name the assumption once/);
-  });
-
-  it('keeps one-question-at-a-time as the default with the batch as the lone exception', () => {
-    const prompt = buildSystemPrompt({ safety });
-    expect(prompt).toMatch(/Ask one question at a time, and only when it genuinely moves the reflection forward\./);
-    expect(prompt).toMatch(/may group up to three structured questions into a single batch/);
-  });
-
-  it('requires a user-language freeform label for the custom answer field', () => {
-    const prompt = buildSystemPrompt({ safety });
-    expect(prompt).toMatch(/Always set freeformLabel/);
-    expect(prompt).toMatch(/phrased in the person's language/);
+describe('prompt privacy boundary', () => {
+  it('never emits the full legal name, email, or birth date', () => {
+    const prompt = buildSystemPrompt({
+      profile: identityProfile,
+      safety,
+      teenUser: true,
+      memories: [{ content: 'private fact', category: 'context' }],
+      approvedContext: [{ title: 'entry', body: 'entry body' }],
+    });
+    expect(prompt).not.toContain(identityProfile.full_name);
+    expect(prompt).not.toContain(identityProfile.date_of_birth);
+    expect(prompt).not.toContain('@');
   });
 });

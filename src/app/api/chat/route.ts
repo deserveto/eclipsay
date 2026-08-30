@@ -10,6 +10,7 @@ import {
 import type { User } from '@supabase/supabase-js';
 import { getModel, isAiConfigured } from '@/lib/ai/provider';
 import { buildSystemPrompt, type MemoryForPrompt } from '@/lib/ai/system-prompt';
+import { isTeenAge } from '@/lib/auth/validation';
 import { classify } from '@/lib/ai/safety';
 import { createTarotTools } from '@/lib/ai/tools';
 import { createClient, getAuthUser, isSupabaseServerConfigured } from '@/lib/supabase/server';
@@ -95,12 +96,17 @@ export async function POST(request: Request) {
     } else {
       const seedProfile = {
         id: user.id,
+        // Identity fields stay null here: this fallback row is created for
+        // non-signup sessions (legacy/OAuth users own them via the trigger
+        // or /api/auth/complete-profile), never invented by chat.
+        full_name: null,
         display_name: null,
+        date_of_birth: null,
         reflection_goal: null,
         tarot_familiarity: null,
-      memory_enabled: true,
-      created_at: new Date().toISOString(),
-    };
+        memory_enabled: true,
+        created_at: new Date().toISOString(),
+      };
     await supabase.from('profiles').upsert(seedProfile);
     }
 
@@ -161,12 +167,20 @@ export async function POST(request: Request) {
     approvedContext = (data ?? []) as { title: string; body: string }[];
   }
 
-  // High-stakes conversations get NO tarot tools at all (plan: Safety classifier).
   const tools = safety.highStakes ? undefined : createTarotTools({ user });
 
   const result = streamText({
     model: getModel(),
-    system: buildSystemPrompt({ profile, memories, safety, approvedContext, tarotEvent }),
+    system: buildSystemPrompt({
+      profile,
+      memories,
+      safety,
+      approvedContext,
+      tarotEvent,
+      // Privacy boundary (plan: Accounts §7): only the derived 13–17 band
+      // crosses into the prompt — never the birth date, full name, or email.
+      teenUser: isTeenAge(profile?.date_of_birth),
+    }),
     messages: await convertToModelMessages(messages),
     stopWhen: isStepCount(5),
     tools,

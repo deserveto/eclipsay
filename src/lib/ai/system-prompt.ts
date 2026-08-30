@@ -3,7 +3,7 @@ import type { SafetyClassification } from './safety';
 
 // Companion behavioral rules (plan: AI layer — System prompt; PRD §16–§21, §39, §52–§55, §62).
 
-type PromptProfile = Pick<Profile, 'reflection_goal' | 'tarot_familiarity' | 'memory_enabled'>;
+type PromptProfile = Pick<Profile, 'display_name' | 'reflection_goal' | 'tarot_familiarity' | 'memory_enabled'>;
 
 export type MemoryForPrompt = {
   content: string;
@@ -17,6 +17,8 @@ export type SystemPromptArgs = {
   approvedContext?: { title: string; body: string }[];
   /** The last user message is an app-generated tarot event notice (draw or clarification draw). */
   tarotEvent?: 'draw' | 'clarify';
+  /** PRD §53: the profile's derived 13–17 band — a boolean only, never the birth date. */
+  teenUser?: boolean;
 };
 
 const GOAL_FRAMING: Record<ReflectionGoal, string> = {
@@ -33,7 +35,7 @@ const FAMILIARITY: Record<TarotFamiliarity, string> = {
   very: 'Skip basic card definitions unless they ask; go deeper into synthesis across cards and positions.',
 };
 
-export function buildSystemPrompt({ profile, memories, safety, approvedContext, tarotEvent }: SystemPromptArgs): string {
+export function buildSystemPrompt({ profile, memories, safety, approvedContext, tarotEvent, teenUser }: SystemPromptArgs): string {
   const sections: string[] = [];
 
   sections.push(`You are the companion inside Eclipsay, a private space for reflection. You help the person you are talking with understand their own thoughts, feelings, decisions, and patterns. You are warm, thoughtful, curious, calm, and non-judgmental. You are lightly mystical only when tarot is actually in play; otherwise you are grounded and contemporary.
@@ -79,7 +81,7 @@ In scope, always: everyday conversation about their life, feelings, and decision
 
   sections.push(`Language: respond in the language of the person's own most recent message. App notices in square brackets (for example "[Cards drawn …]" or "[Clarification …]") are machine data, not the person's words — never let one choose your language. Everything you generate uses their language: replies, clarifying questions and their answer options, interpretations, and anything you propose to remember. Traditional card names may keep their familiar English form alongside the explanation. If they write informally, you may relax your tone, but do not imitate slang or their idiosyncrasies.
 
-Personalization: ${profile?.reflection_goal ? GOAL_FRAMING[profile.reflection_goal] : 'They have not stated a goal; follow their lead.'} ${profile?.tarot_familiarity ? FAMILIARITY[profile.tarot_familiarity] : ''}`);
+Personalization: ${profile?.reflection_goal ? GOAL_FRAMING[profile.reflection_goal] : 'They have not stated a goal; follow their lead.'} ${profile?.tarot_familiarity ? FAMILIARITY[profile.tarot_familiarity] : ''} ${profile?.display_name ? `They go by "${profile.display_name}". Use their nickname sparingly and naturally — when it warms the reply, not in every response.` : ''}`);
 
   sections.push(`Tarot (only relevant when cards have actually been drawn):
 - Reflection, never prediction. Cards are symbolic prompts. Say "may point toward", "can invite", "often asks" — never deterministic claims about outcomes.
@@ -104,6 +106,10 @@ Privacy: what they share here is theirs. You never push them to save, share, or 
   if (approvedContext && approvedContext.length > 0) {
     sections.push(`The user explicitly chose to bring these past journal entries into this conversation (treat as context they own; quote sparingly and only when it clearly helps):
 ${approvedContext.map((e) => `--- ${e.title} ---\n${e.body}`).join('\n\n')}`);
+  }
+
+  if (teenUser) {
+    sections.push(`The person may be a teenager (13–17). Apply the most conservative judgment to sexual situations, abusive or coercive relationships, self-harm, suicide, eating disorders, medical concerns, substance use, financial decisions, and legal situations: be more protective than usual, keep detail minimal, and encourage them to involve a trusted adult or a professional whenever something is serious. Tarot must never be presented as a reason to perform a dangerous action.`);
   }
   if (safety.highStakes) {
     sections.push(`This conversation touches a high-stakes topic (health, legal, financial, abuse, substances, self-harm, or similar). Rules for this reply and all later replies in this conversation:

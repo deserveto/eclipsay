@@ -3,11 +3,14 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
-import { Brain, Compass, Menu, NotebookPen, PanelLeft, PanelLeftClose, Plus, Settings, User } from 'lucide-react';
+import { Brain, Compass, Menu, NotebookPen, PanelLeft, PanelLeftClose, Plus, Settings, User, UserPlus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
+import { AccountStatusBanner } from '@/components/auth/account-status-banner';
+import { MigrationDialog } from '@/components/auth/migration-dialog';
 import { FollowUpBanner } from '@/components/followups/followup-banner';
 import { RecentSessions } from '@/components/sessions/recent-sessions';
+import { useDataMode } from '@/hooks/use-data-mode';
 
 const navItems = [
   { href: '/journal', label: 'Journal', icon: NotebookPen },
@@ -19,6 +22,38 @@ const accountItems = [
   { href: '/profile', label: 'Profile', icon: User },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
+
+// Reachable account entry for guests (PRD §14, plan: Accounts §5): a quiet
+// card above the account nav in the expanded sidebar and mobile Sheet. Both
+// actions preserve the current in-app path as `next`. Guests only — account
+// users keep the Profile/Settings navigation.
+function GuestAccountCard({ onNavigate }: { onNavigate?: () => void }) {
+  const pathname = usePathname();
+  const query = new URLSearchParams({ next: pathname });
+  return (
+    <div className="mb-2 rounded-xl border border-border bg-card p-3.5">
+      <p className="text-sm font-medium">Keep your reflections with you</p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Create a free account to sync your Journal, Memory, and History — and pick up on any device.
+      </p>
+      <div className="mt-3 flex flex-col gap-2">
+        <Button size="sm" asChild>
+          <Link href={`/signup?${query}`} onClick={onNavigate}>
+            Create account
+          </Link>
+        </Button>
+        <Link
+          href={`/login?${query}`}
+          onClick={onNavigate}
+          className="text-center text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+        >
+          Log in
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   return (
@@ -41,32 +76,35 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-function NavLinksBottom({ onNavigate }: { onNavigate?: () => void }) {
+function NavLinksBottom({ mode, onNavigate }: { mode: 'guest' | 'account'; onNavigate?: () => void }) {
   const pathname = usePathname();
   const items = accountItems;
   return (
-    <nav className="flex flex-col gap-0.5" aria-label="Account">
-      {items.map(({ href, label, icon: Icon }) => (
-        <Link
-          key={href}
-          href={href}
-          onClick={onNavigate}
-          aria-current={pathname === href ? 'page' : undefined}
-          className={`flex items-center gap-2.5 rounded-md px-3 py-1.5 text-sm transition-colors ${
-            pathname === href
-              ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-              : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-          }`}
-        >
-          <Icon className="size-4" aria-hidden />
-          {label}
-        </Link>
-      ))}
-    </nav>
+    <>
+      {mode === 'guest' && <GuestAccountCard onNavigate={onNavigate} />}
+      <nav className="flex flex-col gap-0.5" aria-label="Account">
+        {items.map(({ href, label, icon: Icon }) => (
+          <Link
+            key={href}
+            href={href}
+            onClick={onNavigate}
+            aria-current={pathname === href ? 'page' : undefined}
+            className={`flex items-center gap-2.5 rounded-md px-3 py-1.5 text-sm transition-colors ${
+              pathname === href
+                ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+                : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+            }`}
+          >
+            <Icon className="size-4" aria-hidden />
+            {label}
+          </Link>
+        ))}
+      </nav>
+    </>
   );
 }
 
-function SidebarInner({ onNavigate }: { onNavigate?: () => void }) {
+function SidebarInner({ mode, onNavigate }: { mode: 'guest' | 'account'; onNavigate?: () => void }) {
   return (
     <div className="flex h-full flex-col px-3 py-4">
       <Link
@@ -82,7 +120,7 @@ function SidebarInner({ onNavigate }: { onNavigate?: () => void }) {
         <RecentSessions onNavigate={onNavigate} />
       </div>
       <div className="mt-2 shrink-0 border-t border-foreground/10 pt-2">
-        <NavLinksBottom onNavigate={onNavigate} />
+        <NavLinksBottom mode={mode} onNavigate={onNavigate} />
       </div>
     </div>
   );
@@ -92,6 +130,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const pathname = usePathname();
+  const { mode } = useDataMode();
 
   // ChatGPT-style collapse (user request): the persisted choice loads after
   // mount so SSR and hydration always agree on the expanded default.
@@ -165,6 +204,16 @@ export function AppShell({ children }: { children: ReactNode }) {
               ))}
             </nav>
             <div className="mt-auto flex flex-col items-center gap-1">
+              {mode === 'guest' && (
+                <Link
+                  href={`/signup?${new URLSearchParams({ next: pathname })}`}
+                  aria-label="Create account"
+                  title="Create account"
+                  className="grid size-9 place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground focus-visible:bg-sidebar-accent focus-visible:outline-none"
+                >
+                  <UserPlus className="size-4" aria-hidden />
+                </Link>
+              )}
               {accountItems.map(({ href, label, icon: Icon }) => (
                 <Link
                   key={href}
@@ -206,12 +255,16 @@ export function AppShell({ children }: { children: ReactNode }) {
                 </Button>
               </div>
             </div>
-            <SidebarInner />
+            <SidebarInner mode={mode} />
           </div>
         )}
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
+        <AccountStatusBanner />
         <FollowUpBanner />
+        {/* Migration is app-global (plan: Accounts §6): it follows verification
+           or OAuth regardless of which destination the redirect lands on. */}
+        <MigrationDialog enabled={mode === 'account'} />
         <header className="flex items-center gap-2 border-b px-3 py-2 md:hidden">
           <Sheet open={open} onOpenChange={setOpen}>
             <SheetTrigger asChild>
@@ -226,7 +279,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <img src="/logo.webp" alt="Eclipsay logo" className="size-8" />
                 <span className="text-sm tracking-wide text-primary">ECLIPSAY</span>
               </div>
-              <SidebarInner onNavigate={() => setOpen(false)} />
+              <SidebarInner mode={mode} onNavigate={() => setOpen(false)} />
             </SheetContent>
           </Sheet>
           <Link href="/reflect" className="flex items-center gap-2 text-sm font-medium" aria-label="Eclipsay home">

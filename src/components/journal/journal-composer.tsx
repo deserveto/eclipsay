@@ -10,6 +10,8 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { appendAiNote, listEntries, makeEntry, persistEntry, removeEntry } from '@/lib/journal/entries';
+import { guestSaveToast } from '@/lib/account-nudge';
+import { useDataMode } from '@/hooks/use-data-mode';
 import type { AiNoteType, JournalEntry, Mood } from '@/lib/types';
 import { toast } from 'sonner';
 
@@ -24,6 +26,7 @@ const ASSIST_ACTIONS: { type: AiNoteType; label: string }[] = [
 
 function ComposerInner() {
   const router = useRouter();
+  const { mode } = useDataMode();
   const searchParams = useSearchParams();
   const editId = searchParams.get('id');
 
@@ -71,7 +74,12 @@ function ComposerInner() {
         updated_at: new Date().toISOString(),
       };
       await persistEntry(updated);
-      toast.success('Saved to your journal.');
+      if (mode === 'guest') {
+        // Value moment after a local save (PRD §14, plan: Accounts §5).
+        guestSaveToast('Saved to your journal.', router.push);
+      } else {
+        toast.success('Saved to your journal.');
+      }
       router.push('/journal');
     } catch {
       toast.error('Could not save. Your text is still here — try again.');

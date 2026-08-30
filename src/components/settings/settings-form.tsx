@@ -1,13 +1,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { SignInDialog } from '@/components/auth/sign-in-dialog';
 import { AppearanceSetting } from '@/components/settings/appearance-setting';
 import { useDataMode } from '@/hooks/use-data-mode';
+import { completeProfileSchema, thirteenYearCutoff, zodFieldErrors } from '@/lib/auth/validation';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import { clearGuestData, clearGuestHistory, loadGuestStore, saveGuestProfile } from '@/lib/guest/store';
 import type { ReflectionGoal, TarotFamiliarity } from '@/lib/types';
@@ -29,8 +30,10 @@ const FAMILIARITY: { value: TarotFamiliarity; label: string }[] = [
 
 export function SettingsForm() {
   const { mode } = useDataMode();
-  const [signInOpen, setSignInOpen] = useState(false);
   const [displayName, setDisplayName] = useState('');
+  const [fullName, setFullName] = useState('');
+  const [dateOfBirth, setDateOfBirth] = useState('');
+  const [identityErrors, setIdentityErrors] = useState<Record<string, string>>({});
   const [goal, setGoal] = useState<ReflectionGoal | ''>('');
   const [familiarity, setFamiliarity] = useState<TarotFamiliarity | ''>('');
   const [memoryEnabled, setMemoryEnabled] = useState(true);
@@ -56,7 +59,9 @@ export function SettingsForm() {
       .then(({ data }) => {
         const p = data?.[0];
         if (p) {
+          setFullName(p.full_name ?? '');
           setDisplayName(p.display_name ?? '');
+          setDateOfBirth(p.date_of_birth ?? '');
           setGoal(p.reflection_goal ?? '');
           setFamiliarity(p.tarot_familiarity ?? '');
           setMemoryEnabled(p.memory_enabled);
@@ -71,9 +76,19 @@ export function SettingsForm() {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) return;
+    // Identity edits pass the same boundary as signup/complete-profile
+    // (plan: Accounts §7) — including the 13+ rule on the corrected date.
+    const identity = completeProfileSchema.safeParse({ fullName, displayName, dateOfBirth });
+    if (!identity.success) {
+      setIdentityErrors(zodFieldErrors(identity.error));
+      return;
+    }
+    setIdentityErrors({});
     const row = {
       id: user.id,
-      display_name: displayName.trim() || null,
+      full_name: identity.data.fullName,
+      display_name: identity.data.displayName,
+      date_of_birth: identity.data.dateOfBirth,
       reflection_goal: goal || null,
       tarot_familiarity: familiarity || null,
       memory_enabled: memoryEnabled,
@@ -159,13 +174,58 @@ export function SettingsForm() {
         {mode === 'account' ? (
           <div className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="displayName">Display name</Label>
+              <Label htmlFor="fullName">Full name</Label>
+              <Input
+                id="fullName"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                autoComplete="name"
+                aria-invalid={identityErrors.fullName ? true : undefined}
+                aria-describedby={identityErrors.fullName ? 'fullName-error' : undefined}
+              />
+              {identityErrors.fullName && (
+                <p id="fullName-error" className="text-xs text-destructive">
+                  {identityErrors.fullName}
+                </p>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="displayName">What should we call you?</Label>
               <Input
                 id="displayName"
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="How should we greet you?"
+                autoComplete="nickname"
+                aria-invalid={identityErrors.displayName ? true : undefined}
+                aria-describedby={identityErrors.displayName ? 'displayName-error' : undefined}
               />
+              {identityErrors.displayName && (
+                <p id="displayName-error" className="text-xs text-destructive">
+                  {identityErrors.displayName}
+                </p>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="dateOfBirth">Date of birth</Label>
+              <Input
+                id="dateOfBirth"
+                type="date"
+                value={dateOfBirth}
+                onChange={(e) => setDateOfBirth(e.target.value)}
+                max={thirteenYearCutoff()}
+                autoComplete="bday"
+                aria-invalid={identityErrors.dateOfBirth ? true : undefined}
+                aria-describedby={identityErrors.dateOfBirth ? 'dateOfBirth-error' : 'dateOfBirth-hint'}
+              />
+              {identityErrors.dateOfBirth ? (
+                <p id="dateOfBirth-error" className="text-xs text-destructive">
+                  {identityErrors.dateOfBirth}
+                </p>
+              ) : (
+                <p id="dateOfBirth-hint" className="text-xs text-muted-foreground">
+                  Editable for corrections only — Eclipsay supports ages 13 and up, and this is never displayed.
+                </p>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="goal">Reflection goal</Label>
@@ -235,8 +295,8 @@ export function SettingsForm() {
               </div>
             </div>
             <div>
-              <Button variant="secondary" onClick={() => setSignInOpen(true)}>
-                Create an account
+              <Button variant="secondary" asChild>
+                <Link href="/signup?next=%2Fsettings">Create an account</Link>
               </Button>
             </div>
             {!isSupabaseConfigured() && (
@@ -337,7 +397,6 @@ export function SettingsForm() {
         )}
       </section>
 
-      <SignInDialog open={signInOpen} onOpenChange={setSignInOpen} />
     </div>
   );
 }
