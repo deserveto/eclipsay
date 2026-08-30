@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, isStaticToolUIPart } from 'ai';
 import { RefreshCw, PenLine, NotebookPen } from 'lucide-react';
@@ -11,8 +11,6 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Markdown } from '@/components/chat/markdown';
 import { CrisisResources } from '@/components/chat/crisis-resources';
 import { OnboardingDialogs } from '@/components/chat/onboarding-dialogs';
-import { MigrationDialog } from '@/components/auth/migration-dialog';
-import { SignInDialog } from '@/components/auth/sign-in-dialog';
 import { toast } from 'sonner';
 import { TarotSpread, DrawFailedCard } from '@/components/tarot/tarot-spread';
 import { DrawBar } from '@/components/tarot/draw-bar';
@@ -23,6 +21,7 @@ import { track } from '@/lib/analytics';
 import { useDataMode } from '@/hooks/use-data-mode';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import { appendMessage, getGuestSession, loadGuestStore, saveFollowUp, saveInsight as saveGuestInsight, saveMemory, saveReading, saveSession, updateMessageMeta } from '@/lib/guest/store';
+import { guestSaveToast } from '@/lib/account-nudge';
 import { activeAskUserPart, extractToolParts, joinUiText, staleInteractiveMessageIds, storedToUi, type ChatMessage } from '@/lib/chat/convert';
 import { generateSessionTitle } from '@/lib/chat/session-actions';
 import { titleFrom } from '@/lib/chat/title';
@@ -63,6 +62,7 @@ type ReadingsState = Record<string, { spreadId: string; cards: DrawnCard[] }>;
 
 export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) {
   const { mode } = useDataMode();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const [input, setInput] = useState('');
   const lastSent = useRef('');
@@ -94,7 +94,6 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   const [drawBar, setDrawBar] = useState<{ readingId: string; spreadId: string; cards: DrawnCard[] } | null>(null);
   const [drawFailedSpread, setDrawFailedSpread] = useState<string | null>(null);
   const [checkInOpen, setCheckInOpen] = useState(false);
-  const [signInOpen, setSignInOpen] = useState(false);
   const [actedConfirms, setActedConfirms] = useState<Set<string>>(new Set());
   const [approvedContext, setApprovedContext] = useState<SearchHit[]>([]);
   const [savedMessageIds, setSavedMessageIds] = useState<Set<string>>(new Set());
@@ -480,9 +479,10 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
         return false;
       }
     } else {
-      // Guest: save locally, then offer the account as the value moment (§14).
       saveGuestInsight(makeEntry({ body: text, entry_type: 'insight', source_session_id: sessionId, created_at: now, updated_at: now }));
-      setSignInOpen(true);
+      // Guest: save locally first, then offer the account as the value moment
+      // (§14) — a non-blocking toast action, shown once (plan: Accounts §5).
+      guestSaveToast('Insight saved to your journal.', router.push);
     }
     track('insight_saved');
     toast.success('Insight saved to your journal.');
@@ -605,13 +605,6 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   return (
     <div className="flex h-full min-h-0 flex-col">
       {mode === "guest" && <OnboardingDialogs />}
-      <MigrationDialog enabled={mode === "account"} />
-      <SignInDialog
-        open={signInOpen}
-        onOpenChange={setSignInOpen}
-        title="Create an account to keep this reflection."
-      />
-
       <Dialog open={checkInOpen} onOpenChange={setCheckInOpen}>
         <DialogContent className="max-w-sm rounded-2xl border border-border bg-card p-5 shadow-xl ring-0">
           <DialogHeader>

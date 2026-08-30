@@ -212,6 +212,12 @@ export function clearGuestData(storage?: Storage): void {
   window.dispatchEvent(new CustomEvent('eclipsay:guest-store-changed'));
 }
 
+/** Whether the store holds any data worth migrating (PRD §64). */
+export function guestStoreHasData(storage?: Storage): boolean {
+  const store = loadGuestStore(storage);
+  return store.sessions.length > 0 || store.journal.length > 0 || store.insights.length > 0 || store.memories.length > 0;
+}
+
 // Profile field mapping between micro-onboarding answers and the profiles row.
 export function goalToDb(goal: ReflectionGoal | undefined): Profile['reflection_goal'] {
   return goal ?? null;
