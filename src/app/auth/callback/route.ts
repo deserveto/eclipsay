@@ -11,11 +11,14 @@ export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get('code');
 
+  // Dev quirk: `next dev` rebuilds request.url on localhost:3000 behind any
+  // proxy/tunnel, so every redirect must resolve against the configured origin.
+  const appOrigin = process.env.NEXT_PUBLIC_APP_URL ?? origin;
+
   if (!isSupabaseServerConfigured()) {
-    return NextResponse.redirect(new URL('/login?error=oauth_failed', origin));
+    return NextResponse.redirect(new URL('/login?error=oauth_failed', appOrigin));
   }
 
-  const appOrigin = process.env.NEXT_PUBLIC_APP_URL ?? origin;
   const next = safeNextPath(searchParams.get('next'), appOrigin);
 
   if (code) {
@@ -32,13 +35,13 @@ export async function GET(request: Request) {
           .eq('id', user.id)
           .maybeSingle();
         if (!profile?.full_name || !profile?.display_name || !profile?.date_of_birth) {
-          const completion = new URL('/complete-profile', origin);
+          const completion = new URL('/complete-profile', appOrigin);
           completion.searchParams.set('next', next);
           return NextResponse.redirect(completion);
         }
       }
-      return NextResponse.redirect(new URL(next, origin));
+      return NextResponse.redirect(new URL(next, appOrigin));
     }
   }
-  return NextResponse.redirect(new URL('/login?error=oauth_failed', origin));
+  return NextResponse.redirect(new URL('/login?error=oauth_failed', appOrigin));
 }
