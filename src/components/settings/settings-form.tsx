@@ -5,8 +5,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { Separator } from '@/components/ui/separator';
 import { SignInDialog } from '@/components/auth/sign-in-dialog';
+import { AppearanceSetting } from '@/components/settings/appearance-setting';
 import { useDataMode } from '@/hooks/use-data-mode';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import { clearGuestData, clearGuestHistory, loadGuestStore, saveGuestProfile } from '@/lib/guest/store';
@@ -148,13 +148,14 @@ export function SettingsForm() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-2xl space-y-8 px-4 py-8">
-      <header>
+    <div className="mx-auto w-full max-w-2xl space-y-10 px-4 py-8">
+      <header className="space-y-1">
         <h1 className="text-2xl font-medium tracking-tight">Settings</h1>
+        <p className="text-sm text-muted-foreground">Tune your experience and manage your data.</p>
       </header>
 
       <section className="space-y-4">
-        <h2 className="text-sm font-medium tracking-wide text-muted-foreground uppercase">Profile</h2>
+        <h2 className="text-base font-medium">Profile</h2>
         {mode === 'account' ? (
           <div className="space-y-4">
             <div className="space-y-1.5">
@@ -172,7 +173,7 @@ export function SettingsForm() {
                 id="goal"
                 value={goal}
                 onChange={(e) => setGoal(e.target.value as ReflectionGoal)}
-                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-base transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm"
               >
                 <option value="">Not set</option>
                 {GOALS.map((g) => (
@@ -188,7 +189,7 @@ export function SettingsForm() {
                 id="familiarity"
                 value={familiarity}
                 onChange={(e) => setFamiliarity(e.target.value as TarotFamiliarity)}
-                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-base transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm"
               >
                 <option value="">Not set</option>
                 {FAMILIARITY.map((f) => (
@@ -198,8 +199,8 @@ export function SettingsForm() {
                 ))}
               </select>
             </div>
-            <div className="flex items-center justify-between rounded-lg border border-border px-3.5 py-3">
-              <div>
+            <div className="flex items-center justify-between gap-4 rounded-xl border border-border px-3.5 py-3">
+              <div className="min-w-0">
                 <Label htmlFor="memory">Let Eclipsay remember</Label>
                 <p className="text-xs text-muted-foreground">
                   Only what you explicitly save is remembered, and only while this is on.
@@ -213,26 +214,31 @@ export function SettingsForm() {
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="flex flex-wrap gap-2">
-              {GOALS.map((g) => (
-                <button
-                  key={g.value}
-                  type="button"
-                  aria-pressed={guestGoal === g.value}
-                  onClick={() => saveGuestProfile({ reflectionGoal: g.value })}
-                  className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
-                    guestGoal === g.value
-                      ? 'border-primary bg-primary/10 text-primary'
-                      : 'border-border text-muted-foreground hover:bg-accent'
-                  }`}
-                >
-                  {g.label}
-                </button>
-              ))}
+            <div className="space-y-2">
+              <p className="text-sm">What brings you to Eclipsay?</p>
+              <div className="flex flex-wrap gap-2">
+                {GOALS.map((g) => (
+                  <button
+                    key={g.value}
+                    type="button"
+                    aria-pressed={guestGoal === g.value}
+                    onClick={() => saveGuestProfile({ reflectionGoal: g.value })}
+                    className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
+                      guestGoal === g.value
+                        ? 'border-primary bg-primary/10 text-primary'
+                        : 'border-border text-muted-foreground hover:bg-accent'
+                    }`}
+                  >
+                    {g.label}
+                  </button>
+                ))}
+              </div>
             </div>
-            <Button variant="secondary" onClick={() => setSignInOpen(true)}>
-              Create an account
-            </Button>
+            <div>
+              <Button variant="secondary" onClick={() => setSignInOpen(true)}>
+                Create an account
+              </Button>
+            </div>
             {!isSupabaseConfigured() && (
               <p className="text-xs text-muted-foreground">
                 Accounts need Supabase credentials in .env.local — you are currently a guest.
@@ -242,13 +248,33 @@ export function SettingsForm() {
         )}
       </section>
 
-      <Separator />
+      <section className="space-y-3">
+        <h2 className="text-base font-medium">Appearance</h2>
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 rounded-xl border border-border px-3.5 py-3">
+          <div className="min-w-0">
+            <p className="text-sm">Theme</p>
+            <p className="text-xs text-muted-foreground">Choose how Eclipsay looks on this device.</p>
+          </div>
+          <AppearanceSetting />
+        </div>
+      </section>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-medium tracking-wide text-muted-foreground uppercase">Privacy &amp; Data</h2>
-        {mode === 'guest' && (
-          <div className="flex items-center justify-between rounded-lg border border-border px-3.5 py-3">
-            <div>
+        <h2 className="text-base font-medium">Privacy &amp; data</h2>
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 rounded-xl border border-border px-3.5 py-3">
+          <div className="min-w-0">
+            <p className="text-sm">Export my data</p>
+            <p className="text-xs text-muted-foreground">
+              Download everything Eclipsay stores for you as a JSON file.
+            </p>
+          </div>
+          <Button variant="secondary" size="sm" onClick={exportData}>
+            Export
+          </Button>
+        </div>
+        {mode === 'guest' ? (
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 rounded-xl border border-border px-3.5 py-3">
+            <div className="min-w-0">
               <p className="text-sm">Clear guest data</p>
               <p className="text-xs text-muted-foreground">
                 Removes every reflection, journal entry, and memory stored in this browser.
@@ -267,13 +293,15 @@ export function SettingsForm() {
               Clear
             </Button>
           </div>
-        )}
-        <div className="flex flex-wrap gap-2">
-          <Button variant="secondary" size="sm" onClick={exportData}>
-            Export my data (JSON)
-          </Button>
-          {mode === 'account' && (
-            <>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 rounded-xl border border-border px-3.5 py-3">
+              <div className="min-w-0">
+                <p className="text-sm">Clear history</p>
+                <p className="text-xs text-muted-foreground">
+                  Removes every reflection session. Journal entries and memories stay.
+                </p>
+              </div>
               <Button
                 variant="secondary"
                 size="sm"
@@ -283,8 +311,16 @@ export function SettingsForm() {
                   }
                 }}
               >
-                Clear History
+                Clear
               </Button>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 rounded-xl border border-border px-3.5 py-3">
+              <div className="min-w-0">
+                <p className="text-sm">Delete account</p>
+                <p className="text-xs text-muted-foreground">
+                  Permanently deletes your account and all of its data. This cannot be undone.
+                </p>
+              </div>
               <Button
                 variant="destructive"
                 size="sm"
@@ -294,11 +330,11 @@ export function SettingsForm() {
                   }
                 }}
               >
-                Delete account
+                Delete
               </Button>
-              </>
-          )}
-        </div>
+            </div>
+          </>
+        )}
       </section>
 
       <SignInDialog open={signInOpen} onOpenChange={setSignInOpen} />
