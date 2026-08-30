@@ -35,7 +35,7 @@ export function isQuestionBatch(value: unknown): value is ClarificationBatch {
       question.length >= 5 &&
       Array.isArray(options) &&
       options.length >= 2 &&
-      options.every((option) => typeof option === 'string' && option.length > 0 && option.length <= 80) &&
+      options.every((option) => typeof option === 'string' && option.length > 0 && option.length <= 200) &&
       typeof allowMultiple === 'boolean'
     );
   })) {

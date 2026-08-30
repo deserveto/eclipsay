@@ -74,6 +74,21 @@ describe('ask_user', () => {
     expect(output.questions).toHaveLength(2);
   });
 
+  it('accepts option strings longer than the old 80-char UI cap (log regression: 95/108-char options)', async () => {
+    const long = "What's actually underneath my feelings — what I'm really seeking from this connection";
+    const input = {
+      questions: [
+        {
+          question: 'What would you most like the cards to help you see or reflect on?',
+          options: [long, 'How to find peace and clarity about where things stand'],
+          allowMultiple: false,
+        },
+      ],
+    };
+    expect(long.length).toBeGreaterThan(80);
+    expect((await exec(tools.ask_user, input)) as unknown).toEqual(input);
+  });
+
   it('round-trips freeformLabel when provided and tolerates its absence', async () => {
     const withLabel = {
       questions: [{ question: 'What part of the decision feels heaviest?', options: ['Timing', 'Money'], allowMultiple: false }],
