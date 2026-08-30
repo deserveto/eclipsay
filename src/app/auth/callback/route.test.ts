@@ -42,6 +42,13 @@ describe('GET /auth/callback', () => {
     expect(res.headers.get('location')).toBe('http://localhost:3000/journal');
   });
 
+  it('resolves redirects against NEXT_PUBLIC_APP_URL when set', async () => {
+    process.env.NEXT_PUBLIC_APP_URL = 'https://eclipsay.app';
+    maybeSingle.mockResolvedValue({ data: { full_name: 'Ana', display_name: 'Ana', date_of_birth: '2000-01-01' } });
+    const res = await get('/auth/callback?code=c&next=%2Fjournal');
+    expect(res.headers.get('location')).toBe('https://eclipsay.app/journal');
+  });
+
   it('routes a first-time incomplete identity to /complete-profile with next preserved', async () => {
     maybeSingle.mockResolvedValue({ data: { full_name: 'Ana', display_name: 'Ana', date_of_birth: null } });
     const res = await get('/auth/callback?code=c&next=%2Fprofile%3Fx%3D1');

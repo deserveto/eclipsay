@@ -49,11 +49,13 @@ describe('GET /auth/confirm', () => {
     expect(res.headers.get('location')).toBe('http://localhost:3000/reflect?verified=1');
   });
 
-  it('rejects a next from a foreign origin even when NEXT_PUBLIC_APP_URL is set', async () => {
+  it('rejects a foreign-origin next and honors an allowed-origin next when NEXT_PUBLIC_APP_URL is set', async () => {
     process.env.NEXT_PUBLIC_APP_URL = 'https://eclipsay.app';
     verifyOtp.mockResolvedValue({ error: null });
-    const res = await get('/auth/confirm?token_hash=tok&type=email&next=https%3A%2F%2Fevil.example%2Fsteal');
-    expect(res.headers.get('location')).toBe('http://localhost:3000/reflect?verified=1');
+    const foreign = await get('/auth/confirm?token_hash=tok&type=email&next=https%3A%2F%2Fevil.example%2Fsteal');
+    expect(foreign.headers.get('location')).toBe('https://eclipsay.app/reflect?verified=1');
+    const allowed = await get('/auth/confirm?token_hash=tok&type=email&next=https%3A%2F%2Feclipsay.app%2Fjournal');
+    expect(allowed.headers.get('location')).toBe('https://eclipsay.app/journal?verified=1');
   });
 
   it('routes missing or expired tokens to login with a visible error', async () => {
