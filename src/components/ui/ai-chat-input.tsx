@@ -10,6 +10,7 @@ export interface AiChatInputProps {
   onSubmit: () => void;
   onOpenCheckIn: () => void;
   onExploreCards: () => void;
+  cardsDisabled?: boolean;
   busy?: boolean;
   placeholder?: string;
   className?: string;
@@ -21,26 +22,27 @@ export function AiChatInput({
   onSubmit,
   onOpenCheckIn,
   onExploreCards,
+  cardsDisabled = false,
   busy = false,
   placeholder = "Share what's on your mind…",
   className,
 }: AiChatInputProps) {
   const [focused, setFocused] = useState(false);
-  const [textareaHeight, setTextareaHeight] = useState(52);
+  const textareaHeight = useRef(52);
   const formRef = useRef<HTMLFormElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const hasValue = value.trim().length > 0;
   const expanded = focused || hasValue || busy;
 
   useEffect(() => {
+    const form = formRef.current;
     const textarea = textareaRef.current;
+    const nextHeight = textarea ? Math.max(52, Math.min(textarea.scrollHeight, 160)) : textareaHeight.current;
+    textareaHeight.current = nextHeight;
+    if (form) form.style.height = `${expanded ? nextHeight + 44 : 52}px`;
     if (!textarea) return;
-
-    textarea.style.height = '0px';
-    const nextHeight = Math.max(52, Math.min(textarea.scrollHeight, 160));
     textarea.style.height = `${nextHeight}px`;
-    setTextareaHeight(nextHeight);
-  }, [value]);
+  }, [value, expanded]);
 
   const submit = (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
@@ -67,7 +69,7 @@ export function AiChatInput({
       onMouseDown={(event) => {
         if (event.target === formRef.current) textareaRef.current?.focus();
       }}
-      style={{ height: expanded ? textareaHeight + 44 : 52 }}
+      style={{ height: expanded ? textareaHeight.current + 44 : 52 }}
       className={cn(
         'relative w-full overflow-hidden rounded-[22px] border border-border bg-card',
         'transition-[height,border-color,box-shadow] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
@@ -91,17 +93,9 @@ export function AiChatInput({
         )}
       />
 
-      <div
-        aria-hidden={!expanded}
-        className={cn(
-          'absolute bottom-2 left-2.5 right-14 flex h-9 items-center gap-1',
-          'transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none',
-          expanded ? 'translate-y-0 opacity-100' : 'pointer-events-none translate-y-2 opacity-0',
-        )}
-      >
+      <div className="absolute bottom-2 left-2.5 right-14 flex h-9 items-center gap-1">
         <button
           type="button"
-          tabIndex={expanded ? 0 : -1}
           aria-label="Check in with me later"
           title="Check in with me later"
           onClick={onOpenCheckIn}
@@ -115,25 +109,26 @@ export function AiChatInput({
           <Clock3 className="size-3.5" aria-hidden />
           <span>Check in</span>
         </button>
-        <button
-          type="button"
-          tabIndex={expanded ? 0 : -1}
-          aria-label="Explore with cards"
-          title="Explore with cards"
-          onClick={onExploreCards}
-          className={cn(
-            'relative inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-muted-foreground',
-            'outline-none transition-colors hover:bg-muted hover:text-foreground',
-            'focus-visible:ring-3 focus-visible:ring-ring/50 active:translate-y-px',
-            'after:absolute after:-inset-1.5 after:content-[\"\"]',
-          )}
-        >
-          <Sparkles className="size-3.5" aria-hidden />
-          <span>Cards</span>
-        </button>
+        {!cardsDisabled && (
+          <button
+            type="button"
+            aria-label="Explore with cards"
+            title="Explore with cards"
+            onClick={onExploreCards}
+            className={cn(
+              'relative inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-muted-foreground',
+              'outline-none transition-colors hover:bg-muted hover:text-foreground',
+              'focus-visible:ring-3 focus-visible:ring-ring/50 active:translate-y-px',
+              'after:absolute after:-inset-1.5 after:content-[\"\"]',
+            )}
+          >
+            <Sparkles className="size-3.5" aria-hidden />
+            <span>Cards</span>
+          </button>
+        )}
 
         {busy && (
-          <span className="ml-auto inline-flex items-center gap-1.5 pr-1 text-xs text-muted-foreground">
+          <span className="ml-auto inline-flex items-center gap-1.5 pr-1 text-xs text-muted-foreground" aria-live="polite">
             <span className="size-1.5 animate-pulse rounded-full bg-primary motion-reduce:animate-none" aria-hidden />
             Reflecting…
           </span>

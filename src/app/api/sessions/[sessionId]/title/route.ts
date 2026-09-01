@@ -3,6 +3,9 @@ import { generateText } from 'ai';
 import { coerceTitle, titleFrom, titlePrompt, titleSystemPrompt } from '@/lib/chat/title';
 import { getModel, isAiConfigured } from '@/lib/ai/provider';
 import { createClient, getAuthUser, isSupabaseServerConfigured } from '@/lib/supabase/server';
+import { guardGeneratedOutput } from '@/lib/ai/output-guard';
+import { isSystemNotice } from '@/lib/chat/convert';
+import type { MessageMeta } from '@/lib/types';
 
 // Title generation for a conversation (PRD §34). Works for both modes:
 // guests send the first exchange's texts in the body (their sessions have no
@@ -47,11 +50,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
     const supabase = await createClient();
     const { data } = await supabase
       .from('messages')
-      .select('role, content')
+      .select('role, content, meta')
       .eq('session_id', sessionId)
       .order('created_at');
-    for (const row of (data ?? []) as { role: string; content: string }[]) {
-      if (userText.length === 0 && row.role === 'user') userText = row.content;
+    for (const row of (data ?? []) as { role: string; content: string; meta?: MessageMeta | null }[]) {
+      if (userText.length === 0 && row.role === 'user' && !isSystemNotice(row.meta ?? undefined)) {
+        userText = row.content;
+      }
       if (assistantText.length === 0 && row.role === 'assistant') assistantText = row.content;
     }
   }
@@ -64,7 +69,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
       system: titleSystemPrompt(),
       prompt: titlePrompt(userText, assistantText),
     });
-    title = coerceTitle(text);
+    const coercedTitle = coerceTitle(text);
+    const guardedTitle = guardGeneratedOutput(coercedTitle, 1);
+    if (!guardedTitle || text.trim().length === 0) {
+      return Response.json({ error: 'generation_failed' }, { status: 500 });
+    }
+    title = guardedTitle;
   } catch {
     // Generation is cosmetic; the placeholder title stays and the client
     // surfaces nothing.

@@ -1,5 +1,44 @@
 import { describe, expect, it } from 'vitest';
-import { activeAskUserPart, staleInteractiveMessageIds, type ChatMessage } from './convert';
+import { activeAskUserPart, isSystemNotice, joinUiText, staleInteractiveMessageIds, storedToUi, type ChatMessage } from './convert';
+
+describe('isSystemNotice', () => {
+  it('recognizes new draw and clarification markers', () => {
+    expect(isSystemNotice({ systemNotice: 'draw' })).toBe(true);
+    expect(isSystemNotice({ systemNotice: 'clarify' })).toBe(true);
+  });
+
+  it('recognizes legacy reading metadata markers', () => {
+    expect(isSystemNotice({ readingId: 'reading-1' })).toBe(true);
+    expect(
+      isSystemNotice({
+        clarify: { readingId: 'reading-1', targetCardId: 'the_moon', clarifierCardId: 'the_star' },
+      }),
+    ).toBe(true);
+  });
+
+  it('does not classify ordinary or missing metadata as system notices', () => {
+    expect(isSystemNotice({ crisis: true })).toBe(false);
+    expect(isSystemNotice(undefined)).toBe(false);
+  });
+});
+
+describe('stored machine notices', () => {
+  it('preserves the marker while the renderer can suppress its protocol text', () => {
+    const hydrated = storedToUi({
+      id: 'm1',
+      session_id: 's1',
+      user_id: '',
+      role: 'user',
+      content: '[Cards drawn · one_card] 1. The Star (upright)',
+      meta: { systemNotice: 'draw', readingId: 'r1' },
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+
+    expect(hydrated.metadata?.systemNotice).toBe('draw');
+    expect(isSystemNotice(hydrated.metadata)).toBe(true);
+    expect(joinUiText(hydrated)).toContain('[Cards drawn');
+  });
+});
 
 const msg = (id: string, role: 'user' | 'assistant') => ({ id, role });
 

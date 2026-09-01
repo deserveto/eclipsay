@@ -67,3 +67,14 @@ export function classify(text: string): SafetyClassification {
   }
   return { highStakes, crisis };
 }
+
+export function classifyTranscript(texts: readonly string[]): SafetyClassification {
+  let highStakes = false;
+  let crisis = false;
+  for (const text of texts) {
+    const classification = classify(text);
+    highStakes ||= classification.highStakes;
+    crisis ||= classification.crisis;
+  }
+  return { highStakes, crisis };
+}

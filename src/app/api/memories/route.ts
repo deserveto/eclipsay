@@ -34,6 +34,13 @@ export async function POST(request: Request) {
   if (!parsed.success) return Response.json({ error: 'invalid_body' }, { status: 400 });
 
   const supabase = await createClient();
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('memory_enabled')
+    .eq('id', user.id)
+    .maybeSingle();
+  if (profileError) return Response.json({ error: 'memory_setting_unavailable' }, { status: 500 });
+  if (profile?.memory_enabled === false) return Response.json({ error: 'memory_disabled' }, { status: 400 });
   const now = new Date().toISOString();
   const { data, error } = await supabase
     .from('memories')

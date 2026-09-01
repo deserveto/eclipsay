@@ -1,9 +1,8 @@
 import type { AiNote, AiNoteType, JournalEntry } from '@/lib/types';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import { deleteJournalEntry, loadGuestStore, saveJournalEntry } from '@/lib/guest/store';
-import { useDataMode } from '@/hooks/use-data-mode';
 
-// Mode-aware journal access: guest store vs Supabase (plan: useDataMode).
+// Mode-aware journal access: guest store vs Supabase.
 
 export function guestAllEntries(): JournalEntry[] {
   const store = loadGuestStore();

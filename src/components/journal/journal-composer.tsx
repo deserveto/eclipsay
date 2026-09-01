@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft } from 'lucide-react';
@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { appendAiNote, listEntries, makeEntry, persistEntry, removeEntry } from '@/lib/journal/entries';
+import { clearJournalDraft, readJournalDraft, writeJournalDraft, type JournalDraft } from '@/lib/journal/drafts';
 import { guestSaveToast } from '@/lib/account-nudge';
 import { useDataMode } from '@/hooks/use-data-mode';
 import type { AiNoteType, JournalEntry, Mood } from '@/lib/types';
@@ -24,6 +25,20 @@ const ASSIST_ACTIONS: { type: AiNoteType; label: string }[] = [
   { type: 'summary', label: 'Summarize what I\u2019m feeling' },
 ];
 
+function normalizeDraft(draft: JournalDraft): JournalDraft {
+  return {
+    editId: draft.editId,
+    title: draft.title.trim(),
+    body: draft.body.trim(),
+    mood: draft.mood.trim(),
+    tags: draft.tags
+      .split(',')
+      .map((tag) => tag.trim())
+      .filter(Boolean)
+      .join(', '),
+  };
+}
+
 function ComposerInner() {
   const router = useRouter();
   const { mode } = useDataMode();
@@ -37,20 +52,92 @@ function ComposerInner() {
   const [tags, setTags] = useState('');
   const [busy, setBusy] = useState(false);
   const [assistBusy, setAssistBusy] = useState<AiNoteType | null>(null);
+  const [hydrated, setHydrated] = useState(false);
+  const [draftSaved, setDraftSaved] = useState(false);
+  const draftTimer = useRef<number | null>(null);
 
   useEffect(() => {
-    if (!editId) return;
-    listEntries().then((entries) => {
-      const found = entries.find((e) => e.id === editId);
-      if (found) {
-        setEntry(found);
-        setTitle(found.title ?? '');
-        setBody(found.body);
-        setMood((found.mood as Mood) ?? '');
-        setTags(found.tags.join(', '));
+    let active = true;
+    setHydrated(false);
+    setDraftSaved(false);
+    if (draftTimer.current !== null) {
+      window.clearTimeout(draftTimer.current);
+      draftTimer.current = null;
+    }
+
+    const applyValues = (nextEntry: JournalEntry | null, savedDraft: JournalDraft | null) => {
+      if (!active) return;
+      const baseline: JournalDraft = {
+        editId,
+        title: nextEntry?.title ?? '',
+        body: nextEntry?.body ?? '',
+        mood: nextEntry?.mood ?? '',
+        tags: nextEntry?.tags.join(', ') ?? '',
+      };
+      const values = savedDraft ?? baseline;
+      setEntry(nextEntry);
+      setTitle(values.title);
+      setBody(values.body);
+      setMood((values.mood as Mood) || '');
+      setTags(values.tags);
+      setHydrated(true);
+    };
+
+    if (!editId) {
+      applyValues(null, mode === 'guest' ? readJournalDraft(null) : null);
+      return () => {
+        active = false;
+      };
+    }
+
+    listEntries()
+      .then((entries) => {
+        const found = entries.find((e) => e.id === editId) ?? null;
+        const savedDraft = found && mode === 'guest' ? readJournalDraft(editId) : null;
+        applyValues(found, savedDraft);
+      })
+      .catch(() => {
+        if (active) setHydrated(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [editId, mode]);
+
+  const currentDraft: JournalDraft = { editId, title, body, mood, tags };
+  const persistedDraft: JournalDraft = {
+    editId,
+    title: entry?.title ?? '',
+    body: entry?.body ?? '',
+    mood: entry?.mood ?? '',
+    tags: entry?.tags.join(', ') ?? '',
+  };
+  const guestDraftDirty =
+    hydrated && JSON.stringify(normalizeDraft(currentDraft)) !== JSON.stringify(normalizeDraft(persistedDraft));
+
+  useEffect(() => {
+    if (!hydrated || mode !== 'guest') return;
+    if (!guestDraftDirty) {
+      clearJournalDraft();
+      setDraftSaved(false);
+      return;
+    }
+
+    setDraftSaved(false);
+    draftTimer.current = window.setTimeout(() => {
+      if (writeJournalDraft({ editId, title, body, mood, tags })) {
+        setDraftSaved(true);
       }
-    });
-  }, [editId]);
+      draftTimer.current = null;
+    }, 250);
+
+    return () => {
+      if (draftTimer.current !== null) {
+        window.clearTimeout(draftTimer.current);
+        draftTimer.current = null;
+      }
+    };
+  }, [body, editId, entry, guestDraftDirty, hydrated, mode, mood, tags, title]);
 
   const save = async () => {
     if (body.trim().length === 0) return;
@@ -74,6 +161,10 @@ function ComposerInner() {
         updated_at: new Date().toISOString(),
       };
       await persistEntry(updated);
+      if (mode === 'guest') {
+        clearJournalDraft();
+        setDraftSaved(false);
+      }
       if (mode === 'guest') {
         // Value moment after a local save (PRD §14, plan: Accounts §5).
         guestSaveToast('Saved to your journal.', router.push);
@@ -109,15 +200,26 @@ function ComposerInner() {
     }
   };
 
+  const confirmExit = () =>
+    body.trim().length === 0 || window.confirm('Leave this entry? Your draft is kept on this device.');
+
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (body.trim().length === 0) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [body]);
+
   return (
     <div className="mx-auto w-full max-w-2xl space-y-6 px-4 py-8">
       <header className="space-y-1">
         <Link
           href="/journal"
           onClick={(e) => {
-            if (body.trim().length > 0 && !window.confirm('Leave this entry? Unsaved text will be lost.')) {
-              e.preventDefault();
-            }
+            if (!confirmExit()) e.preventDefault();
           }}
           className="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
         >
@@ -190,13 +292,22 @@ function ComposerInner() {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => router.push(`/reflect?tarot=1&prefill=${encodeURIComponent(body.slice(0, 200))}`)}
+                onClick={() => {
+                  if (confirmExit()) {
+                    router.push(`/reflect?tarot=1&prefill=${encodeURIComponent(body.slice(0, 200))}`);
+                  }
+                }}
               >
                 Reflect with tarot
               </Button>
             </>
           )}
         </div>
+        {mode === 'guest' && draftSaved && (
+          <p className="text-xs text-muted-foreground" aria-live="polite">
+            Draft saved locally
+          </p>
+        )}
 
         {entry && (
           <div className="pt-2">
@@ -206,7 +317,10 @@ function ComposerInner() {
               onClick={() => {
                 if (window.confirm('Delete this journal entry? This cannot be undone.')) {
                   void removeEntry(entry.id)
-                    .then(() => router.push('/journal'))
+                    .then(() => {
+                      if (mode === 'guest') clearJournalDraft();
+                      router.push('/journal');
+                    })
                     .catch(() => toast.error('Could not delete the entry. Try again.'));
                 }
               }}

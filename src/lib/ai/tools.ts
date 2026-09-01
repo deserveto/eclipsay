@@ -108,7 +108,7 @@ export function createTarotTools({ user }: { user: User | null }) {
           const clarifier = await clarifyReading({ user, readingId, cardId, alreadyDrawn: [] });
           return { readingId, cardId, clarifier };
         } catch {
-          return { error: 'draw_failed' as const };
+          return { error: 'draw_failed' as const, readingId, cardId };
         }
       },
     }),

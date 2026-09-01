@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import type { ToolUIPart } from 'ai';
 import type { ChatMessage } from '@/lib/chat/convert';
 import { DrawFailedCard } from '@/components/tarot/tarot-spread';
@@ -8,7 +9,7 @@ export type SearchHit = { entryId: string; title: string; createdAt?: string };
 
 type ConfirmHandlers = {
   onSaveInsight: (text: string) => void;
-  onRememberThis: (content: string, category: string) => void;
+  onRememberThis: (content: string, category: string) => Promise<boolean>;
   onBringItIn: (hit: SearchHit) => void;
   markActed: (toolCallId: string) => void;
   actedIds: Set<string>;
@@ -25,6 +26,7 @@ function RecommendationCard({
   declined,
   acted,
   stale,
+  tarotUnavailable,
   onBeginReading,
   onDecline,
   markActed,
@@ -33,6 +35,7 @@ function RecommendationCard({
   declined: boolean;
   acted: boolean;
   stale: boolean;
+  tarotUnavailable: boolean;
   onBeginReading: (spreadId: string) => void;
   onDecline: () => void;
   markActed: (toolCallId: string) => void;
@@ -76,7 +79,9 @@ function RecommendationCard({
           ))}
         </ol>
       )}
-      {stale && !acted ? (
+      {tarotUnavailable ? (
+        <p className="mt-3 text-xs opacity-75">Cards are unavailable for this reflection.</p>
+      ) : stale && !acted ? (
         <p className="mt-3 text-xs opacity-75">Set aside — just ask if you&rsquo;d like this reading.</p>
       ) : (
         <div className="mt-3.5">
@@ -148,14 +153,25 @@ function AskUserHistory({
   );
 }
 
-function ClarifyResultPart({ part }: { part: ToolUIPart }) {
+function ClarifyResultPart({
+  part,
+  onClarifyRetry,
+}: {
+  part: ToolUIPart;
+  onClarifyRetry: (readingId: string, cardId: string) => void;
+}) {
   if (part.state !== 'output-available') {
     return <p className="text-sm text-muted-foreground">Drawing a clarification card…</p>;
   }
   const output = part.output as
-    | { error?: string; clarifier?: { name: string; orientation: string }; cardId?: string }
+    | { error?: string; readingId?: string; clarifier?: { name: string; orientation: string }; cardId?: string }
     | undefined;
-  if (output?.error) return <DrawFailedCard onRetry={() => {}} />;
+  if (output?.error) {
+    if (typeof output.readingId !== 'string' || typeof output.cardId !== 'string') {
+      return <DrawFailedCard />;
+    }
+    return <DrawFailedCard onRetry={() => onClarifyRetry(output.readingId!, output.cardId!)} />;
+  }
   if (!output?.clarifier) return null;
   return (
     <p className="text-xs text-muted-foreground">
@@ -207,14 +223,16 @@ function MemoryConfirmCard({
   actedIds,
 }: {
   part: ToolUIPart;
-  onRememberThis: (content: string, category: string) => void;
+  onRememberThis: (content: string, category: string) => Promise<boolean>;
   markActed: (toolCallId: string) => void;
   actedIds: Set<string>;
 }) {
+  const [pending, setPending] = useState(false);
   if (part.state !== 'output-available') return null;
   const output = part.output as { memoryId?: string; content?: string; category?: string } | undefined;
   if (!output?.memoryId || !output.content) return null;
   const acted = actedIds.has(part.toolCallId);
+  const disabled = acted || pending;
   return (
     <div className="rounded-xl border border-border bg-card px-4 py-3">
       <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Remember this?</p>
@@ -222,14 +240,21 @@ function MemoryConfirmCard({
       <div className="mt-2 flex gap-2">
         <button
           type="button"
-          disabled={acted}
+          disabled={disabled}
           className="rounded-lg bg-secondary px-3 py-1.5 text-xs transition-opacity hover:opacity-90 disabled:opacity-60"
-          onClick={() => {
-            markActed(part.toolCallId);
-            onRememberThis(output.content!, output.category ?? 'context');
+          onClick={async () => {
+            setPending(true);
+            try {
+              const saved = await onRememberThis(output.content!, output.category ?? 'context');
+              if (saved) markActed(part.toolCallId);
+            } catch {
+              // Failed saves remain retryable and never resolve the proposal.
+            } finally {
+              setPending(false);
+            }
           }}
         >
-          {acted ? 'Remembered' : 'Remember this'}
+          {acted ? 'Remembered' : pending ? 'Saving…' : 'Remember this'}
         </button>
       </div>
     </div>
@@ -286,18 +311,22 @@ export function ToolPartRenderer({
   message,
   declined,
   stale,
+  tarotUnavailable,
   dockedToolCallId,
   onBeginReading,
   onDecline,
+  onClarifyRetry,
   confirm,
 }: {
   message: ChatMessage;
   declined: boolean;
   stale: boolean;
+  tarotUnavailable?: boolean;
   /** The live ask_user batch renders docked above the composer; it renders nothing here. */
   dockedToolCallId?: string;
   onBeginReading: (spreadId: string) => void;
   onDecline: () => void;
+  onClarifyRetry: (readingId: string, cardId: string) => void;
   confirm: ConfirmHandlers;
 }) {
   return (
@@ -324,13 +353,14 @@ export function ToolPartRenderer({
                   declined={declined}
                   acted={confirm.actedIds.has(part.toolCallId)}
                   stale={stale}
+                  tarotUnavailable={tarotUnavailable ?? false}
                   onBeginReading={onBeginReading}
                   onDecline={onDecline}
                   markActed={confirm.markActed}
                 />
               );
             case 'tool-request_clarification':
-              return <ClarifyResultPart key={part.toolCallId} part={part} />;
+              return <ClarifyResultPart key={part.toolCallId} part={part} onClarifyRetry={onClarifyRetry} />;
             case 'tool-propose_insight':
               return <InsightConfirmCard key={part.toolCallId} part={part} onSaveInsight={confirm.onSaveInsight} markActed={confirm.markActed} actedIds={confirm.actedIds} />;
             case 'tool-propose_memory':

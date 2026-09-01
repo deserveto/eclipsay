@@ -17,6 +17,7 @@ export type SystemPromptArgs = {
   approvedContext?: { title: string; body: string }[];
   /** The last user message is an app-generated tarot event notice (draw or clarification draw). */
   tarotEvent?: 'draw' | 'clarify';
+  tarotUnavailable?: boolean;
   /** PRD §53: the profile's derived 13–17 band — a boolean only, never the birth date. */
   teenUser?: boolean;
 };
@@ -35,7 +36,15 @@ const FAMILIARITY: Record<TarotFamiliarity, string> = {
   very: 'Skip basic card definitions unless they ask; go deeper into synthesis across cards and positions.',
 };
 
-export function buildSystemPrompt({ profile, memories, safety, approvedContext, tarotEvent, teenUser }: SystemPromptArgs): string {
+export function buildSystemPrompt({
+  profile,
+  memories,
+  safety,
+  approvedContext,
+  tarotEvent,
+  tarotUnavailable,
+  teenUser,
+}: SystemPromptArgs): string {
   const sections: string[] = [];
 
   sections.push(`You are the companion inside Eclipsay, a private space for reflection. You help the person you are talking with understand their own thoughts, feelings, decisions, and patterns. You are warm, thoughtful, curious, calm, and non-judgmental. You are lightly mystical only when tarot is actually in play; otherwise you are grounded and contemporary.
@@ -122,6 +131,10 @@ ${approvedContext.map((e) => `--- ${e.title} ---\n${e.body}`).join('\n\n')}`);
     if (safety.crisis) {
       sections.push(`The conversation may involve thoughts of self-harm or suicide. Prioritize their safety and dignity. Respond warmly and without panic; encourage them to reach out to someone who can sit with them right now — a local crisis line or emergency services. Keep this brief and human: one clear sentence naming support, not a lecture and not a form letter. If outside the US, they can find local lines via findahelpline.com. Do not offer tarot, do not moralize, and do not take over their story.`);
     }
+  }
+
+  if (tarotUnavailable) {
+    sections.push(`Tarot is unavailable for the remainder of this reflection. Do not use tarot tools, card language, card suggestions, or card interpretation. Continue with ordinary grounded reflection and conversation.`);
   }
 
   return sections.join('\n\n');

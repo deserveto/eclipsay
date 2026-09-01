@@ -15,6 +15,7 @@ import {
   saveSession,
 } from './store';
 import type { JournalEntry, Memory, StoredMessage, TarotReading } from '../types';
+import { JOURNAL_DRAFT_KEY } from '../journal/drafts';
 
 class MemoryStorage implements Storage {
   private map = new Map<string, string>();
@@ -125,11 +126,13 @@ describe('guest store round-trip', () => {
     expect(getGuestSession('s1', storage)?.messages).toHaveLength(1);
   });
 
-  it('returns an empty store for missing or corrupt data', () => {
+  it('returns an empty store for missing or corrupt data and clears drafts', () => {
     storage.setItem('eclipsay.guest.v1', '{not json');
+    storage.setItem(JOURNAL_DRAFT_KEY, JSON.stringify({ editId: null, title: '', body: 'draft', mood: '', tags: '' }));
     expect(loadGuestStore(storage)).toEqual(emptyGuestStore());
     clearGuestData(storage);
     expect(loadGuestStore(storage)).toEqual(emptyGuestStore());
+    expect(storage.getItem(JOURNAL_DRAFT_KEY)).toBeNull();
   });
 });
 

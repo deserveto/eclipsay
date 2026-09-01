@@ -21,6 +21,8 @@ const CATEGORY_LABEL: Record<string, string> = {
   reflection_preference: 'Reflection preference',
 };
 
+const MEMORY_DISABLED_MESSAGE = 'Memory is off. Turn it back on to add memories.';
+
 function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: 'long', day: 'numeric' });
 }
@@ -132,6 +134,10 @@ export function MemoryView() {
   };
 
   const addManual = () => {
+    if (!memoryEnabled) {
+      toast.error(MEMORY_DISABLED_MESSAGE);
+      return;
+    }
     if (newContent.trim().length === 0) return;
     const now = new Date().toISOString();
     const memory: Memory = {
@@ -145,20 +151,33 @@ export function MemoryView() {
       updated_at: now,
     };
     if (mode === 'account' && isSupabaseConfigured()) {
-      const supabase = createClient();
-      void supabase.auth.getUser().then(async ({ data }) => {
-        if (!data.user) {
-          toast.error('Sign in to save memories to your account.');
-          return;
-        }
-        const { error } = await supabase.from('memories').insert({ ...memory, user_id: data.user.id });
-        if (error) {
-          toast.error('Could not save the memory. Your text is kept — try again.');
-          return;
-        }
-        setNewContent('');
-        reload();
-      });
+      void fetch('/api/memories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: memory.content,
+          category: memory.category,
+          source: memory.source,
+        }),
+      })
+        .then(async (res) => {
+          if (!res.ok) {
+            const payload: unknown = await res.json().catch(() => null);
+            const errorCode =
+              payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string'
+                ? payload.error
+                : undefined;
+            toast.error(
+              errorCode === 'memory_disabled'
+                ? MEMORY_DISABLED_MESSAGE
+                : 'Could not save the memory. Your text is kept — try again.',
+            );
+            return;
+          }
+          setNewContent('');
+          reload();
+        })
+        .catch(() => toast.error('Could not save the memory. Your text is kept — try again.'));
     } else {
       saveMemory(memory);
       reload();
@@ -182,6 +201,11 @@ export function MemoryView() {
         </Label>
         <Switch id="master" checked={memoryEnabled} onCheckedChange={(v) => void toggleMaster(v)} />
       </div>
+      {!memoryEnabled && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {MEMORY_DISABLED_MESSAGE}
+        </p>
+      )}
 
       <div className="flex flex-col gap-2 sm:flex-row">
         <Input
@@ -189,11 +213,13 @@ export function MemoryView() {
           onChange={(e) => setNewContent(e.target.value)}
           placeholder="Add something for Eclipsay to remember…"
           aria-label="New memory"
+          disabled={!memoryEnabled}
         />
         <select
           value={newCategory}
           onChange={(e) => setNewCategory(e.target.value)}
           aria-label="Memory category"
+          disabled={!memoryEnabled}
           className="h-9 rounded-md border border-input bg-background px-3 text-sm"
         >
           {Object.entries(CATEGORY_LABEL).map(([value, label]) => (
@@ -202,7 +228,7 @@ export function MemoryView() {
             </option>
           ))}
         </select>
-        <Button onClick={addManual} disabled={newContent.trim().length === 0}>
+        <Button onClick={addManual} disabled={!memoryEnabled || newContent.trim().length === 0}>
           Remember this
         </Button>
       </div>

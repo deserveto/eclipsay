@@ -14,6 +14,49 @@ const FILTERS = [
   { value: 'pentacles', label: 'Pentacles' },
 ] as const;
 
+export function SpreadCard({ spread }: { spread: (typeof SPREADS)[number] }) {
+  return (
+    <div className="flex gap-4 rounded-xl border border-foreground/10 bg-card p-4 transition-colors hover:border-foreground/20">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-2">
+          <h2 className="text-[0.9375rem] font-medium leading-snug">{spread.title}</h2>
+          <span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-[0.6875rem] font-medium text-secondary-foreground">
+            {spread.positions.length} {spread.positions.length === 1 ? 'card' : 'cards'}
+          </span>
+        </div>
+        <p className="mt-1 text-xs leading-5 text-muted-foreground">{spread.description}</p>
+        <ol className="mt-3 space-y-1">
+          {spread.positions.map((position, i) => (
+            <li key={position} className="flex items-baseline gap-2 text-sm leading-5">
+              <span className="text-[0.6875rem] font-medium tabular-nums text-muted-foreground">{i + 1}</span>
+              {position}
+            </li>
+          ))}
+        </ol>
+        <Link
+          href="/reflect?tarot=1"
+          className="mt-3 inline-flex text-sm font-medium text-primary underline-offset-4 hover:underline"
+        >
+          Explore with cards
+        </Link>
+      </div>
+      <div
+        className="hidden shrink-0 flex-wrap items-start justify-end gap-1.5 sm:flex"
+        aria-hidden
+      >
+        {spread.positions.map((position, i) => (
+          <div
+            key={position}
+            className="grid h-[54px] w-[36px] place-items-center rounded-[5px] border border-foreground/15 bg-secondary text-[0.6875rem] font-medium tabular-nums text-muted-foreground"
+          >
+            {i + 1}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // Card + spread libraries (PRD §48, §31). Guest-accessible.
 export function ExploreView() {
   const [filter, setFilter] = useState<(typeof FILTERS)[number]['value']>('all');
@@ -97,41 +140,7 @@ export function ExploreView() {
       {tab === 'spreads' && (
         <div role="tabpanel" id="library-panel-spreads" aria-labelledby="library-tab-spreads" tabIndex={0} className="grid gap-3 sm:grid-cols-2">
           {SPREADS.map((spread) => (
-            <div
-              key={spread.id}
-              className="flex gap-4 rounded-xl border border-foreground/10 bg-card p-4 transition-colors hover:border-foreground/20"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="flex items-start justify-between gap-2">
-                  <h2 className="text-[0.9375rem] font-medium leading-snug">{spread.title}</h2>
-                  <span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-[0.6875rem] font-medium text-secondary-foreground">
-                    {spread.positions.length} {spread.positions.length === 1 ? 'card' : 'cards'}
-                  </span>
-                </div>
-                <p className="mt-1 text-xs leading-5 text-muted-foreground">{spread.description}</p>
-                <ol className="mt-3 space-y-1">
-                  {spread.positions.map((position, i) => (
-                    <li key={position} className="flex items-baseline gap-2 text-sm leading-5">
-                      <span className="text-[0.6875rem] font-medium tabular-nums text-muted-foreground">{i + 1}</span>
-                      {position}
-                    </li>
-                  ))}
-                </ol>
-              </div>
-              <div
-                className="hidden shrink-0 flex-wrap items-start justify-end gap-1.5 sm:flex"
-                aria-hidden
-              >
-                {spread.positions.map((position, i) => (
-                  <div
-                    key={position}
-                    className="grid h-[54px] w-[36px] place-items-center rounded-[5px] border border-foreground/15 bg-secondary text-[0.6875rem] font-medium tabular-nums text-muted-foreground"
-                  >
-                    {i + 1}
-                  </div>
-                ))}
-              </div>
-            </div>
+            <SpreadCard key={spread.id} spread={spread} />
           ))}
         </div>
       )}

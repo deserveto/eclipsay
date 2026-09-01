@@ -11,9 +11,12 @@ import type { User } from '@supabase/supabase-js';
 import { getModel, isAiConfigured } from '@/lib/ai/provider';
 import { buildSystemPrompt, type MemoryForPrompt } from '@/lib/ai/system-prompt';
 import { isTeenAge } from '@/lib/auth/validation';
-import { classify } from '@/lib/ai/safety';
+import { classify, classifyTranscript } from '@/lib/ai/safety';
+import { getAccountSessionSafety } from '@/lib/ai/session-safety';
+import { tarotUnavailableTransform } from '@/lib/ai/tarot-output-guard';
 import { createTarotTools } from '@/lib/ai/tools';
 import { createClient, getAuthUser, isSupabaseServerConfigured } from '@/lib/supabase/server';
+import { isSystemNotice } from '@/lib/chat/convert';
 import type { MessageMeta, PersistedToolPart, Profile, SpreadId } from '@/lib/types';
 
 export const maxDuration = 60;
@@ -59,17 +62,23 @@ export async function POST(request: Request) {
   if (!parsed.success) {
     return Response.json({ error: 'invalid_body' }, { status: 400 });
   }
-
   const { sessionId, messages, guestMemory } = parsed.data;
+
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+  const humanUserMessages = messages.filter(
+    (message) => message.role === 'user' && !isSystemNotice((message.metadata ?? {}) as MessageMeta),
+  );
+  const lastHumanUser = [...humanUserMessages].reverse()[0];
   const userText = lastUser ? joinText(lastUser) : '';
-  const safety = classify(userText);
+  const humanUserText = lastHumanUser ? joinText(lastHumanUser) : '';
+  const currentSafety = classify(humanUserText);
+  const requestSessionSafety = classifyTranscript(humanUserMessages.map(joinText));
   // Tarot event notices (PRD §25, §32): the client announces a draw or a
   // clarification draw as bracketed data. The interpret directive is injected
   // into the system prompt so the notice's wording never sets the reply
   // language — the model answers in the user's own language instead.
   const lastMeta = (lastUser?.metadata ?? {}) as MessageMeta;
-  const tarotEvent = lastMeta.readingId ? ('draw' as const) : lastMeta.clarify ? ('clarify' as const) : undefined;
+  const tarotEvent = lastMeta.systemNotice ?? (lastMeta.readingId ? ('draw' as const) : lastMeta.clarify ? ('clarify' as const) : undefined);
 
   let user: User | null = null;
   let profile: Profile | null = null;
@@ -79,6 +88,26 @@ export async function POST(request: Request) {
   }
 
   const effectiveSessionId = sessionId;
+  let sessionSafety = requestSessionSafety;
+  if (user) {
+    if (!effectiveSessionId) {
+      return Response.json({ error: 'session_required' }, { status: 400 });
+    }
+    try {
+      const accountSafety = await getAccountSessionSafety(effectiveSessionId, user.id);
+      sessionSafety = {
+        highStakes: requestSessionSafety.highStakes || accountSafety.highStakes,
+        crisis: requestSessionSafety.crisis || accountSafety.crisis,
+      };
+    } catch {
+      return Response.json({ error: 'safety_check_failed' }, { status: 500 });
+    }
+  }
+  const tarotUnavailable = sessionSafety.highStakes;
+  if (tarotUnavailable && tarotEvent) {
+    return Response.json({ error: 'tarot_unavailable' }, { status: 403 });
+  }
+
   if (user) {
     if (!effectiveSessionId) {
       return Response.json({ error: 'session_required' }, { status: 400 });
@@ -131,7 +160,7 @@ export async function POST(request: Request) {
       const { error } = await supabase.from('reflection_sessions').insert({
         id: effectiveSessionId,
         user_id: user.id,
-        title: titleFrom(userText),
+        title: titleFrom(humanUserText),
       });
       if (error) return Response.json({ error: 'session_create_failed' }, { status: 500 });
     }
@@ -140,7 +169,7 @@ export async function POST(request: Request) {
       user_id: user.id,
       role: 'user',
       content: userText,
-      meta: {},
+      meta: lastMeta,
     });
     if (error) return Response.json({ error: 'persist_failed' }, { status: 500 });
   } else if (guestMemory?.enabled) {
@@ -152,10 +181,8 @@ export async function POST(request: Request) {
       .slice(0, 20);
   }
 
-  // Explicitly approved journal context (PRD §43, §44, §60): only entries the
-  // user brought in via the approval flow enter the prompt.
   let approvedContext: { title: string; body: string }[] = [];
-  const approvedMeta = (lastUser?.metadata ?? {}) as { approvedContext?: { entryId: string }[] };
+  const approvedMeta = (lastHumanUser?.metadata ?? {}) as { approvedContext?: { entryId: string }[] };
   const approvedIds = (approvedMeta.approvedContext ?? []).map((c) => c.entryId).filter(Boolean);
   if (user && approvedIds.length > 0 && isSupabaseServerConfigured()) {
     const supabase = await createClient();
@@ -167,16 +194,17 @@ export async function POST(request: Request) {
     approvedContext = (data ?? []) as { title: string; body: string }[];
   }
 
-  const tools = safety.highStakes ? undefined : createTarotTools({ user });
+  const tools = tarotUnavailable ? undefined : createTarotTools({ user });
 
   const result = streamText({
     model: getModel(),
     system: buildSystemPrompt({
       profile,
       memories,
-      safety,
+      safety: currentSafety,
       approvedContext,
       tarotEvent,
+      tarotUnavailable,
       // Privacy boundary (plan: Accounts §7): only the derived 13–17 band
       // crosses into the prompt — never the birth date, full name, or email.
       teenUser: isTeenAge(profile?.date_of_birth),
@@ -184,6 +212,7 @@ export async function POST(request: Request) {
     messages: await convertToModelMessages(messages),
     stopWhen: isStepCount(5),
     tools,
+    experimental_transform: tarotUnavailable ? tarotUnavailableTransform() : undefined,
   });
 
   if (user && effectiveSessionId) {
@@ -196,7 +225,7 @@ export async function POST(request: Request) {
         const meta: MessageMeta = {
           // Persist the crisis classification so surfaces can react on load
           // without re-classifying (plan: Safety classifier).
-          ...(safety.crisis ? { crisis: true } : {}),
+          ...(currentSafety.crisis ? { crisis: true } : {}),
         };
         // Serialize every static tool part so question chips, recommendation
         // cards, and confirm proposals re-render on hydration (PRD §62).

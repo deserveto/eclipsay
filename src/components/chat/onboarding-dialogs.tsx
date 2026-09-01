@@ -23,17 +23,13 @@ const FAMILIARITY: { value: TarotFamiliarity; label: string }[] = [
   { value: 'very', label: 'Very familiar' },
 ];
 
-export function OnboardingDialogs() {
+export function OnboardingDialogs({ eligible }: { eligible: boolean }) {
   const [step, setStep] = useState<'idle' | 'goal' | 'familiarity'>('idle');
   useEffect(() => {
-    if (!loadGuestStore().onboardingDone) setStep('goal');
-  }, []);
+    if (eligible && !loadGuestStore().onboardingDone) setStep('goal');
+  }, [eligible]);
   const finish = () => {
     saveGuestProfile({ onboardingDone: true });
-    setStep('idle');
-  };
-
-  const close = () => {
     setStep('idle');
   };
 
@@ -64,7 +60,7 @@ export function OnboardingDialogs() {
                 {g.label}
               </Button>
             ))}
-            <Button variant="ghost" onClick={close}>
+            <Button variant="ghost" onClick={finish}>
               Skip
             </Button>
           </div>

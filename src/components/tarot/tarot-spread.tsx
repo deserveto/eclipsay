@@ -159,17 +159,19 @@ export function TarotSpread({
   );
 }
 
-export function DrawFailedCard({ onRetry }: { onRetry: () => void }) {
+export function DrawFailedCard({ onRetry }: { onRetry?: () => void }) {
   return (
     <div role="alert" className="flex flex-col gap-2 rounded-xl border border-border bg-card px-4 py-3">
       <p className="text-sm">We couldn&apos;t draw the cards right now.</p>
-      <button
-        type="button"
-        className="w-fit rounded-md bg-secondary px-2.5 py-1 text-xs transition-colors hover:bg-secondary/70"
-        onClick={onRetry}
-      >
-        Retry
-      </button>
+      {onRetry && (
+        <button
+          type="button"
+          className="w-fit rounded-md bg-secondary px-2.5 py-1 text-xs transition-colors hover:bg-secondary/70"
+          onClick={onRetry}
+        >
+          Retry
+        </button>
+      )}
     </div>
   );
 }

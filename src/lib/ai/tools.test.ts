@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createTarotTools, pickReading } from './tools';
 import { getSpread } from '@/lib/tarot/spreads';
+
+const mocks = vi.hoisted(() => ({ clarifyReading: vi.fn() }));
+
+vi.mock('@/lib/tarot/draw-service', () => ({ clarifyReading: mocks.clarifyReading }));
 
 // Behavioral tests for the conversational reading tools (plan: AI layer).
 // The model picks the spread; pickReading supplies display data + alternates,
@@ -58,6 +62,25 @@ describe('recommend_reading', () => {
       spreadId: 'not_a_spread',
     })) as { error: string };
     expect(output.error).toBe('draw_failed');
+  });
+});
+
+describe('request_clarification', () => {
+  it('returns the successful clarification payload unchanged', async () => {
+    const clarifier = { cardId: 'the_star', name: 'The Star', orientation: 'upright' };
+    mocks.clarifyReading.mockResolvedValueOnce(clarifier);
+
+    await expect(
+      exec(tools.request_clarification, { readingId: 'reading-1', cardId: 'the_moon' }),
+    ).resolves.toEqual({ readingId: 'reading-1', cardId: 'the_moon', clarifier });
+  });
+
+  it('returns target identifiers with draw_failed for a retry', async () => {
+    mocks.clarifyReading.mockRejectedValueOnce(new Error('draw failed'));
+
+    await expect(
+      exec(tools.request_clarification, { readingId: 'reading-1', cardId: 'the_moon' }),
+    ).resolves.toEqual({ error: 'draw_failed', readingId: 'reading-1', cardId: 'the_moon' });
   });
 });
 

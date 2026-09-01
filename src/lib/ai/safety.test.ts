@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classify } from './safety';
+import { classify, classifyTranscript } from './safety';
 
 const crisisCases = [
   'I have been having suicidal thoughts lately',
@@ -42,10 +42,30 @@ describe('safety classifier', () => {
       expect(classify(text), text).toEqual({ highStakes: true, crisis: false });
     }
   });
-
   it('passes ordinary reflections through', () => {
     for (const text of negativeCases) {
       expect(classify(text), text).toEqual({ highStakes: false, crisis: false });
     }
+  });
+
+  it('classifies an ordinary transcript as safe', () => {
+    expect(classifyTranscript(['I feel stuck at work.', 'I want to think through my options.'])).toEqual({
+      highStakes: false,
+      crisis: false,
+    });
+  });
+
+  it('keeps a transcript gated after a later safe message', () => {
+    expect(classifyTranscript(['I am having suicidal thoughts.', 'I want to talk about tomorrow morning.'])).toEqual({
+      highStakes: true,
+      crisis: true,
+    });
+  });
+
+  it('merges high-stakes and crisis findings across messages', () => {
+    expect(classifyTranscript(['I am facing foreclosure.', 'I might hurt myself.'])).toEqual({
+      highStakes: true,
+      crisis: true,
+    });
   });
 });

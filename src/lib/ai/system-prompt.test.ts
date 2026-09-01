@@ -57,3 +57,12 @@ describe('prompt privacy boundary', () => {
     expect(prompt).not.toContain('@');
   });
 });
+
+describe('sticky tarot boundary', () => {
+  it('keeps grounded reflection available while disabling tarot for the session', () => {
+    const prompt = buildSystemPrompt({ profile: null, safety, tarotUnavailable: true });
+    expect(prompt).toContain('Tarot is unavailable for the remainder of this reflection.');
+    expect(prompt).toContain('Continue with ordinary grounded reflection and conversation.');
+    expect(prompt).toContain('Do not use tarot tools, card language, card suggestions, or card interpretation.');
+  });
+});

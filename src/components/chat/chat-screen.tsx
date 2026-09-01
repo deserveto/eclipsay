@@ -16,18 +16,21 @@ import { TarotSpread, DrawFailedCard } from '@/components/tarot/tarot-spread';
 import { DrawBar } from '@/components/tarot/draw-bar';
 import { ToolPartRenderer, type SearchHit } from '@/components/chat/tool-parts';
 import { ComposerClarification } from '@/components/chat/composer-clarification';
-import { classify } from '@/lib/ai/safety';
+import { classifyTranscript } from '@/lib/ai/safety';
 import { track } from '@/lib/analytics';
 import { useDataMode } from '@/hooks/use-data-mode';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import { appendMessage, getGuestSession, loadGuestStore, saveFollowUp, saveInsight as saveGuestInsight, saveMemory, saveReading, saveSession, updateMessageMeta } from '@/lib/guest/store';
 import { guestSaveToast } from '@/lib/account-nudge';
-import { activeAskUserPart, extractToolParts, joinUiText, staleInteractiveMessageIds, storedToUi, type ChatMessage } from '@/lib/chat/convert';
+import { activeAskUserPart, extractToolParts, isSystemNotice, joinUiText, staleInteractiveMessageIds, storedToUi, type ChatMessage } from '@/lib/chat/convert';
 import { generateSessionTitle } from '@/lib/chat/session-actions';
 import { titleFrom } from '@/lib/chat/title';
 import { makeEntry } from '@/lib/journal/entries';
 import type { DrawnCard } from '@/lib/tarot/types';
 import type { MemoryCategory, StoredMessage, TarotReading } from '@/lib/types';
+
+const TAROT_UNAVAILABLE_MESSAGE = 'Cards are unavailable for this reflection. Start a new reflection to explore with cards.';
+const MEMORY_DISABLED_MESSAGE = 'Memory is off. Turn it back on to add memories.';
 
 type GuestMemoryPayload = { enabled: boolean; items: { category: string; content: string }[] };
 
@@ -354,7 +357,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
         user_id: '',
         role: 'user',
         content: trimmed,
-        meta: metadata ?? {},
+        meta: fullMetadata,
         created_at: new Date().toISOString(),
       });
     }
@@ -392,6 +395,10 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   // draw fixes the seed server-side (PRD §25–§26); the bar only sequences
   // the reveal, and completion sends the [Cards drawn] summary for the model.
   const beginReading = async (spreadId: string) => {
+    if (tarotUnavailable) {
+      toast.error(TAROT_UNAVAILABLE_MESSAGE);
+      return;
+    }
     ensureGuestSession('Tarot reflection');
     const payload = await restDraw(spreadId);
     if (!payload) {
@@ -403,6 +410,11 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   };
 
   const completeDraw = (order: number[]) => {
+    if (tarotUnavailable) {
+      setDrawBar(null);
+      toast.error(TAROT_UNAVAILABLE_MESSAGE);
+      return;
+    }
     if (!drawBar) return;
     const { readingId, spreadId, cards } = drawBar;
     setDrawBar(null);
@@ -410,10 +422,14 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     // "interpret now" directive lives in the system prompt (route-side), so
     // this notice's wording can never set the reply's language.
     const summary = cards.map((c, i) => `${i + 1}. ${c.name} (${c.orientation}) — ${c.position}`).join(' | ');
-    send(`[Cards drawn · ${spreadId}] ${summary}`, { readingId, revealOrder: order });
+    send(`[Cards drawn · ${spreadId}] ${summary}`, { systemNotice: 'draw', readingId, revealOrder: order });
   };
 
   const clarifyCard = async (readingId: string, cardId: string) => {
+    if (tarotUnavailable) {
+      toast.error(TAROT_UNAVAILABLE_MESSAGE);
+      return;
+    }
     const reading = readings[readingId];
     // A clarification is only meaningful when its interpret message can be
     // sent (send no-ops while a generation is in flight) — otherwise the
@@ -424,7 +440,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
       const res = await fetch('/api/tarot/clarify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ readingId, cardId, alreadyDrawn: reading.cards.map((c) => c.cardId) }),
+        body: JSON.stringify({ readingId, cardId, alreadyDrawn: reading.cards.map((c) => c.cardId), sessionId }),
       });
       if (!res.ok) return;
       const { clarifier } = (await res.json()) as { clarifier: DrawnCard };
@@ -443,7 +459,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
       // Language-neutral event notice (see completeDraw): data only.
       send(
         `[Clarification · ${clarifier.cardId} → ${cardId}] ${clarifier.name} (${clarifier.orientation}) clarifies ${target?.name ?? cardId}`,
-        { clarify: { readingId, targetCardId: cardId, clarifierCardId: clarifier.cardId } },
+        { systemNotice: 'clarify', clarify: { readingId, targetCardId: cardId, clarifierCardId: clarifier.cardId } },
       );
     } finally {
       setClarifyingCardId(null);
@@ -498,27 +514,23 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     });
   };
 
-  // Crisis card visibility is derived only from the committed transcript
-  // (PRD §52–§55): the classifier runs on the latest user text, and a
-  // hydrated assistant reply can carry meta.crisis. Deterministic — the same
-  // message list renders the same card, nothing flashes while a reply
-  // streams, and a newer non-crisis exchange hides it again.
-  const crisisVisible = useMemo(() => {
-    let lastUserIndex = -1;
-    for (let i = chat.messages.length - 1; i >= 0; i--) {
-      if (chat.messages[i].role === 'user') {
-        lastUserIndex = i;
-        break;
-      }
-    }
-    if (lastUserIndex === -1) return false;
-    if (classify(joinUiText(chat.messages[lastUserIndex])).crisis) return true;
-    for (let i = lastUserIndex + 1; i < chat.messages.length; i++) {
-      const message = chat.messages[i];
-      if (message.role === 'assistant' && message.metadata?.crisis === true) return true;
-    }
-    return false;
+  const sessionSafety = useMemo(() => {
+    const userMessages = chat.messages.filter(
+      (message) => message.role === 'user' && !isSystemNotice(message.metadata),
+    );
+    const transcriptSafety = classifyTranscript(userMessages.map(joinUiText));
+    const persistedCrisis = chat.messages.some((message) => message.role === 'assistant' && message.metadata?.crisis === true);
+    return {
+      highStakes: transcriptSafety.highStakes || persistedCrisis,
+      crisis: transcriptSafety.crisis || persistedCrisis,
+    };
   }, [chat.messages]);
+  const crisisVisible = sessionSafety.crisis;
+  const tarotUnavailable = sessionSafety.highStakes;
+
+  useEffect(() => {
+    if (tarotUnavailable && drawBar) setDrawBar(null);
+  }, [drawBar, tarotUnavailable]);
 
   const scheduleFollowUp = async (when: 'tomorrow' | '3days' | '1week') => {
     const day = 24 * 60 * 60 * 1000;
@@ -550,17 +562,31 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     toast.success('Check-in scheduled. Eclipsay will remind you here in the app.');
   };
 
-  const rememberThis = async (content: string, category: string) => {
+  const rememberThis = async (content: string, category: string): Promise<boolean> => {
+    if (mode === 'guest' && !loadGuestStore().profile.memoryEnabled) {
+      toast.error(MEMORY_DISABLED_MESSAGE);
+      return false;
+    }
     const now = new Date().toISOString();
     if (mode === 'account' && isSupabaseConfigured()) {
-      const res = await fetch('/api/memories', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, category, source: 'Reflection' }),
-      });
-      if (!res.ok) {
+      try {
+        const res = await fetch('/api/memories', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content, category, source: 'Reflection' }),
+        });
+        if (!res.ok) {
+          const payload: unknown = await res.json().catch(() => null);
+          const errorCode =
+            payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string'
+              ? payload.error
+              : undefined;
+          toast.error(errorCode === 'memory_disabled' ? MEMORY_DISABLED_MESSAGE : 'Could not save the memory right now.');
+          return false;
+        }
+      } catch {
         toast.error('Could not save the memory right now.');
-        return;
+        return false;
       }
     } else {
       saveMemory({
@@ -576,6 +602,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     }
     track('memory_created');
     toast.success('Remembered. You can edit or forget it anytime in Memory.');
+    return true;
   };
 
   const bringItIn = (hit: SearchHit) => {
@@ -601,10 +628,16 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   const busy = chat.status === 'submitted' || chat.status === 'streaming';
   const failed = chat.status === 'error';
   const empty = chat.messages.length === 0;
+  const onboardingEligible = useMemo(() => {
+    if (busy || sessionSafety.highStakes) return false;
+    const latestAssistant = [...chat.messages].reverse().find((message) => message.role === 'assistant');
+    if (!latestAssistant || joinUiText(latestAssistant).trim().length === 0) return false;
+    return latestAssistant.parts.every((part) => !part.type.startsWith('tool-'));
+  }, [busy, chat.messages, sessionSafety.highStakes]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {mode === "guest" && <OnboardingDialogs />}
+      {mode === 'guest' && <OnboardingDialogs eligible={onboardingEligible} />}
       <Dialog open={checkInOpen} onOpenChange={setCheckInOpen}>
         <DialogContent className="max-w-sm rounded-2xl border border-border bg-card p-5 shadow-xl ring-0">
           <DialogHeader>
@@ -670,6 +703,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
             <div className="flex flex-col gap-6">
               {chat.messages.map((message) => {
                 const meta = message.metadata;
+                const machineNotice = isSystemNotice(meta);
                 const isInitial = initialMessageIds.current.has(message.id);
                 const readingForMessage = meta?.readingId ? readings[meta.readingId] : undefined;
                 if (message.role === 'user') {
@@ -684,7 +718,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
                           }}
                           startRevealed={isInitial}
                           revealOrder={meta.revealOrder as number[] | undefined}
-                          onClarify={clarifyCard}
+                          onClarify={tarotUnavailable ? undefined : clarifyCard}
                           clarifyingCardId={clarifyingCardId}
                           onRevealComplete={() => track('tarot_completed')}
                         />
@@ -709,15 +743,17 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
                           ))}
                         </div>
                       )}
-                      <div className="flex justify-end">
-                        <div
-                          className={`max-w-[85%] rounded-2xl rounded-br-sm bg-secondary px-4 py-2.5 leading-7 whitespace-pre-wrap ${
-                            meta?.readingId || meta?.clarify ? 'text-xs text-muted-foreground italic' : 'text-[15px]'
-                          }`}
-                        >
-                          {joinUiText(message)}
+                      {!machineNotice && (
+                        <div className="flex justify-end">
+                          <div
+                            className={`max-w-[85%] rounded-2xl rounded-br-sm bg-secondary px-4 py-2.5 leading-7 whitespace-pre-wrap ${
+                              meta?.readingId || meta?.clarify ? 'text-xs text-muted-foreground italic' : 'text-[15px]'
+                            }`}
+                          >
+                            {joinUiText(message)}
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   );
                 }
@@ -729,15 +765,17 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
                       message={message}
                       declined={declinedToolCalls.has(message.id)}
                       stale={staleInteractiveIds.has(message.id)}
+                      tarotUnavailable={tarotUnavailable}
                       dockedToolCallId={activeClarification?.messageId === message.id ? activeClarification.part.toolCallId : undefined}
                       onBeginReading={(spreadId) => void beginReading(spreadId)}
+                      onClarifyRetry={(readingId, cardId) => void clarifyCard(readingId, cardId)}
                       onDecline={() => handleDeclined(message.id)}
                       confirm={{
                         actedIds: actedConfirms,
                         markActed: (toolCallId) => handleActed(message.id, toolCallId),
                         approvedEntryIds: new Set(approvedContext.map((c) => c.entryId)),
                         onSaveInsight: (text) => void saveInsightText(text),
-                        onRememberThis: (content, category) => void rememberThis(content, category),
+                        onRememberThis: (content, category) => rememberThis(content, category),
                         onBringItIn: bringItIn,
                       }}
                     />
@@ -749,11 +787,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
                           variant="ghost"
                           disabled={savedMessageIds.has(message.id)}
                           aria-label="Save this reflection to your journal"
-                          className={`text-muted-foreground motion-reduce:transition-none ${
-                            savedMessageIds.has(message.id)
-                              ? 'opacity-100'
-                              : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100'
-                          }`}
+                          className="text-muted-foreground motion-reduce:transition-none"
                           onClick={() => saveMessageInsight(message.id, messageText)}
                         >
                           <NotebookPen aria-hidden />
@@ -833,6 +867,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
             onOpenCheckIn={() => setCheckInOpen(true)}
             onExploreCards={() => setInput("I'd like to explore something with a few cards.")}
             busy={busy}
+            cardsDisabled={tarotUnavailable}
           />
         </div>
       </div>

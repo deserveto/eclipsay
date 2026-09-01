@@ -11,6 +11,7 @@ import type {
   TarotReading,
 } from '../types';
 
+import { JOURNAL_DRAFT_KEY } from '../journal/drafts';
 // Guest data lives entirely in localStorage (PRD §13) — nothing is uploaded
 // until an explicit migration. Row shapes mirror lib/types.ts 1:1 so the
 // migration route can insert records unchanged.
@@ -208,8 +209,17 @@ export function deleteGuestSession(id: string, storage?: Storage): void {
 }
 
 export function clearGuestData(storage?: Storage): void {
-  (storage ?? defaultStorage())?.removeItem(GUEST_STORE_KEY);
-  window.dispatchEvent(new CustomEvent('eclipsay:guest-store-changed'));
+  const target = storage ?? defaultStorage();
+  target?.removeItem(GUEST_STORE_KEY);
+  target?.removeItem(JOURNAL_DRAFT_KEY);
+  if (typeof window !== 'undefined') {
+    try {
+      window.sessionStorage?.removeItem(JOURNAL_DRAFT_KEY);
+    } catch {
+      // Session storage is optional and may be blocked.
+    }
+    window.dispatchEvent(new CustomEvent('eclipsay:guest-store-changed'));
+  }
 }
 
 /** Whether the store holds any data worth migrating (PRD §64). */

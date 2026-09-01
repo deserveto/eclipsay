@@ -3,6 +3,7 @@ import { generateText, isStepCount } from 'ai';
 import { getModel, isAiConfigured } from '@/lib/ai/provider';
 import { buildSystemPrompt } from '@/lib/ai/system-prompt';
 import { classify } from '@/lib/ai/safety';
+import { guardGeneratedOutput } from '@/lib/ai/output-guard';
 
 // AI-assisted journal (PRD §38): generates an AI note; never rewrites the
 // entry body. The client appends the note to entry.ai_notes.
@@ -46,7 +47,9 @@ Keep it brief (under 150 words). Do not rewrite their entry. Do not claim certai
       prompt: parsed.data.content,
       stopWhen: isStepCount(1),
     });
-    return Response.json({ note: result.text, safety });
+    const note = guardGeneratedOutput(result.text, 12);
+    if (!note) return Response.json({ error: 'generation_failed' }, { status: 500 });
+    return Response.json({ note, safety });
   } catch {
     return Response.json({ error: 'generation_failed' }, { status: 500 });
   }

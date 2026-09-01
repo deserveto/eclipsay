@@ -46,6 +46,15 @@ export function joinUiText(message: ChatMessage): string {
     .join('');
 }
 
+export function isSystemNotice(meta: MessageMeta | undefined): boolean {
+  return (
+    meta?.systemNotice === 'draw' ||
+    meta?.systemNotice === 'clarify' ||
+    meta?.readingId !== undefined ||
+    meta?.clarify !== undefined
+  );
+}
+
 // Interactive tool cards (reading suggestions, ask_user chips) are live only
 // until the user's next message (PRD §30); anything earlier is inert history.
 // Derived from transcript position — never persisted, never model-driven — so

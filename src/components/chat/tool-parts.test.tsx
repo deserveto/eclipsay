@@ -14,7 +14,7 @@ const noop = () => {};
 
 const confirm = {
   onSaveInsight: noop,
-  onRememberThis: noop,
+  onRememberThis: async () => true,
   onBringItIn: noop,
   markActed: noop,
   actedIds: new Set<string>(),
@@ -35,6 +35,7 @@ const renderParts = (parts: ToolUIPart[], props: Partial<Parameters<typeof ToolP
       stale: false,
       onBeginReading: noop,
       onDecline: noop,
+      onClarifyRetry: noop,
       confirm,
       ...props,
     }),
@@ -94,6 +95,13 @@ describe('RecommendationCard', () => {
   });
 });
 
+  it('removes new tarot actions when the reflection is unavailable', () => {
+    const html = renderParts([toolPart('tool-recommend_reading', 't1', recommendationOutput)], { tarotUnavailable: true });
+    expect(html).toContain('Cards are unavailable for this reflection.');
+    expect(html).not.toContain('Begin reading');
+    expect(html).not.toContain('Not now');
+  });
+
 const questionBatch = {
   questions: [
     { question: 'What feels heaviest right now?', options: ['The timing', 'The people'], allowMultiple: false },
@@ -124,5 +132,25 @@ describe('AskUserHistory', () => {
   it('renders nothing for pre-cutover single-question payloads', () => {
     const legacy = { question: 'What feels heaviest right now?', options: ['The timing', 'The people'] };
     expect(renderParts([toolPart('tool-ask_user', 't1', legacy)])).toBe('');
+  });
+});
+
+describe('ClarifyResultPart', () => {
+  it('renders a working Retry action when ids are present', () => {
+    const html = renderParts([
+      toolPart('tool-request_clarification', 't1', {
+        error: 'draw_failed',
+        readingId: 'reading-1',
+        cardId: 'the_moon',
+      }),
+    ]);
+    expect(html).toContain('We couldn&#x27;t draw the cards right now.');
+    expect(html).toContain('>Retry</button>');
+  });
+
+  it('renders legacy failures without a dead Retry action', () => {
+    const html = renderParts([toolPart('tool-request_clarification', 't1', { error: 'draw_failed' })]);
+    expect(html).toContain('We couldn&#x27;t draw the cards right now.');
+    expect(html).not.toContain('>Retry</button>');
   });
 });

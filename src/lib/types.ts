@@ -129,6 +129,7 @@ export type ContextChip = {
 };
 
 export type MessageMeta = {
+  systemNotice?: 'draw' | 'clarify';
   readingId?: string;
   approvedContext?: { entryId: string; title: string }[];
   clarify?: { readingId: string; targetCardId: string; clarifierCardId: string };

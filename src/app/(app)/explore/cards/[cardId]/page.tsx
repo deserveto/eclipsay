@@ -35,9 +35,12 @@ export default async function CardDetailPage({ params }: { params: Promise<{ car
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-8">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4">
         <Link href="/explore" className="text-sm font-medium text-primary hover:underline underline-offset-4">
           ← Back to Explore
+        </Link>
+        <Link href="/reflect?tarot=1" className="text-sm font-medium text-primary hover:underline underline-offset-4">
+          Explore with cards
         </Link>
       </div>
       <div className="mt-4 rounded-2xl bg-secondary px-6 py-10 text-center">
