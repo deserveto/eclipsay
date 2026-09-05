@@ -41,13 +41,13 @@ export function SpreadCard({ spread }: { spread: (typeof SPREADS)[number] }) {
         </Link>
       </div>
       <div
-        className="hidden shrink-0 flex-wrap items-start justify-end gap-1.5 sm:flex"
+        className="hidden w-24 shrink-0 grid-cols-2 items-start justify-items-end gap-1.5 sm:grid"
         aria-hidden
       >
         {spread.positions.map((position, i) => (
           <div
             key={position}
-            className="grid h-[54px] w-[36px] place-items-center rounded-[5px] border border-foreground/15 bg-secondary text-[0.6875rem] font-medium tabular-nums text-muted-foreground"
+            className="grid h-10 w-8 place-items-center rounded-[5px] border border-foreground/15 bg-secondary text-[0.6875rem] font-medium tabular-nums text-muted-foreground"
           >
             {i + 1}
           </div>

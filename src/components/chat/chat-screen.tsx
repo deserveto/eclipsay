@@ -15,14 +15,14 @@ import { toast } from 'sonner';
 import { TarotSpread, DrawFailedCard } from '@/components/tarot/tarot-spread';
 import { DrawBar } from '@/components/tarot/draw-bar';
 import { ToolPartRenderer, type SearchHit } from '@/components/chat/tool-parts';
-import { ComposerClarification } from '@/components/chat/composer-clarification';
+import { ComposerClarification, ComposerPlainClarification } from '@/components/chat/composer-clarification';
 import { classifyTranscript } from '@/lib/ai/safety';
 import { track } from '@/lib/analytics';
 import { useDataMode } from '@/hooks/use-data-mode';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
 import { appendMessage, getGuestSession, loadGuestStore, saveFollowUp, saveInsight as saveGuestInsight, saveMemory, saveReading, saveSession, updateMessageMeta } from '@/lib/guest/store';
 import { guestSaveToast } from '@/lib/account-nudge';
-import { activeAskUserPart, extractToolParts, isSystemNotice, joinUiText, staleInteractiveMessageIds, storedToUi, type ChatMessage } from '@/lib/chat/convert';
+import { activeAskUserPart, activePlainClarification, extractToolParts, isSystemNotice, joinUiText, pickInterruptedReading, staleInteractiveMessageIds, storedToUi, type ChatMessage } from '@/lib/chat/convert';
 import { generateSessionTitle } from '@/lib/chat/session-actions';
 import { titleFrom } from '@/lib/chat/title';
 import { makeEntry } from '@/lib/journal/entries';
@@ -61,7 +61,7 @@ function relativeTime(iso: string): string {
   return `${weeks} week${weeks === 1 ? '' : 's'} ago`;
 }
 
-type ReadingsState = Record<string, { spreadId: string; cards: DrawnCard[] }>;
+type ReadingsState = Record<string, { spreadId: string; cards: DrawnCard[]; createdAt: string }>;
 
 export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) {
   const { mode } = useDataMode();
@@ -95,6 +95,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   const [clarifyingCardId, setClarifyingCardId] = useState<string | null>(null);
   const [declinedToolCalls, setDeclinedToolCalls] = useState<Set<string>>(new Set());
   const [drawBar, setDrawBar] = useState<{ readingId: string; spreadId: string; cards: DrawnCard[] } | null>(null);
+  const [dismissedReadings, setDismissedReadingIds] = useState<Set<string>>(new Set());
   const [drawFailedSpread, setDrawFailedSpread] = useState<string | null>(null);
   const [checkInOpen, setCheckInOpen] = useState(false);
   const [actedConfirms, setActedConfirms] = useState<Set<string>>(new Set());
@@ -111,24 +112,28 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   const restoreConfirmState = (messages: StoredMessage[]) => {
     const acted = new Set<string>();
     const declined = new Set<string>();
+    const dismissed = new Set<string>();
     for (const m of messages) {
       for (const id of m.meta.actedToolCallIds ?? []) acted.add(id);
       if (m.meta.declined) declined.add(m.id);
+      for (const id of m.meta.dismissedReadingIds ?? []) dismissed.add(id);
     }
     if (acted.size > 0) setActedConfirms(acted);
     if (declined.size > 0) setDeclinedToolCalls(declined);
+    if (dismissed.size > 0) setDismissedReadingIds(dismissed);
+    return dismissed;
   };
 
   // A reading persisted without a transcript anchor means navigation (or a
   // reload) interrupted the draw mid-bar. The cards are already fixed by the
-  // server seed (PRD §25), so resume the bar instead of losing the draw.
-  const resumeInterruptedDraw = (messages: StoredMessage[], allReadings: ReadingsState) => {
-    const anchored = new Set(messages.map((m) => m.meta?.readingId).filter(Boolean));
-    let orphan: { readingId: string; reading: { spreadId: string; cards: DrawnCard[] } } | null = null;
-    for (const [readingId, reading] of Object.entries(allReadings)) {
-      if (!anchored.has(readingId)) orphan = { readingId, reading };
-    }
-    if (orphan) setDrawBar({ readingId: orphan.readingId, spreadId: orphan.reading.spreadId, cards: orphan.reading.cards });
+  // server seed (PRD §25), so resume the bar instead of losing the draw —
+  // but only the newest reading, and only one drawn after the transcript's
+  // last event, so completed or closed draws never resurrect the bar.
+  const resumeInterruptedDraw = (messages: StoredMessage[], allReadings: ReadingsState, dismissed: Set<string>) => {
+    const readingId = pickInterruptedReading(messages, allReadings, dismissed);
+    if (!readingId) return;
+    const reading = allReadings[readingId];
+    setDrawBar({ readingId, spreadId: reading.spreadId, cards: reading.cards });
   };
 
   const chat = useChat<ChatMessage>({
@@ -178,11 +183,10 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
         }
         const dbReadings: ReadingsState = {};
         for (const r of (reads.data ?? []) as unknown as TarotReading[]) {
-          dbReadings[r.id] = { spreadId: r.spread_id, cards: r.cards };
+          dbReadings[r.id] = { spreadId: r.spread_id, cards: r.cards, createdAt: r.created_at };
         }
         setReadings(dbReadings);
-        restoreConfirmState(dbMessages);
-        resumeInterruptedDraw(dbMessages, dbReadings);
+        resumeInterruptedDraw(dbMessages, dbReadings, restoreConfirmState(dbMessages));
         return;
       }
       // Guest mode: everything lives in localStorage.
@@ -193,11 +197,10 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
           chat.setMessages(session.messages.map(storedToUi));
         }
         const stored: ReadingsState = {};
-        for (const r of session.readings) stored[r.id] = { spreadId: r.spread_id, cards: r.cards };
+        for (const r of session.readings) stored[r.id] = { spreadId: r.spread_id, cards: r.cards, createdAt: r.created_at };
         setReadings(stored);
         setLastActiveAt(session.updated_at);
-        restoreConfirmState(session.messages);
-        resumeInterruptedDraw(session.messages, stored);
+        resumeInterruptedDraw(session.messages, stored, restoreConfirmState(session.messages));
       }
     };
     void hydrate();
@@ -279,15 +282,27 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
         const next = { ...prev };
         for (const r of session.readings) {
           if (!next[r.id]) {
-            next[r.id] = { spreadId: r.spread_id, cards: r.cards };
+            next[r.id] = { spreadId: r.spread_id, cards: r.cards, createdAt: r.created_at };
             changed = true;
           }
         }
         return changed ? next : prev;
       });
+      // The stale snapshot gates the call: ai@7's setMessages always pushes a
+      // new state object, so an unconditional updater loop here would blow
+      // past React's update-depth limit (this effect re-runs on every
+      // messages change). Inside the updater, the freshest transcript wins —
+      // the guest-store event fires synchronously inside send(), before the
+      // optimistic message has flushed, and the fresh dedupe keeps that row
+      // from importing twice.
       const known = new Set(chat.messages.map((m) => m.id));
       const incoming = session.messages.filter((m) => !known.has(m.id));
-      if (incoming.length > 0) chat.setMessages([...chat.messages, ...incoming.map(storedToUi)]);
+      if (incoming.length === 0) return;
+      chat.setMessages((prev) => {
+        const freshKnown = new Set(prev.map((m) => m.id));
+        const freshIncoming = incoming.filter((m) => !freshKnown.has(m.id));
+        return freshIncoming.length > 0 ? [...prev, ...freshIncoming.map(storedToUi)] : prev;
+      });
     };
     merge();
     window.addEventListener('eclipsay:guest-store-changed', merge);
@@ -378,7 +393,8 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   };
 
   const commitDraw = (payload: { readingId: string; spreadId: string; seed: number; cards: DrawnCard[] }) => {
-    setReadings((prev) => ({ ...prev, [payload.readingId]: { spreadId: payload.spreadId, cards: payload.cards } }));
+    const createdAt = new Date().toISOString();
+    setReadings((prev) => ({ ...prev, [payload.readingId]: { spreadId: payload.spreadId, cards: payload.cards, createdAt } }));
     saveReading(sessionId, {
       id: payload.readingId,
       session_id: sessionId,
@@ -386,7 +402,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
       spread_id: payload.spreadId,
       seed: payload.seed,
       cards: payload.cards,
-      created_at: new Date().toISOString(),
+      created_at: createdAt,
     });
     track('tarot_started');
   };
@@ -423,6 +439,20 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     // this notice's wording can never set the reply's language.
     const summary = cards.map((c, i) => `${i + 1}. ${c.name} (${c.orientation}) — ${c.position}`).join(' | ');
     send(`[Cards drawn · ${spreadId}] ${summary}`, { systemNotice: 'draw', readingId, revealOrder: order });
+  };
+
+  // Closing the bar is a decision, not an interruption: remember the reading
+  // (guests persist it on the transcript's last message) so hydration never
+  // resurrects a draw the user walked away from (PRD §25–§26).
+  const cancelDrawBar = () => {
+    if (!drawBar) return;
+    const next = new Set(dismissedReadings).add(drawBar.readingId);
+    setDismissedReadingIds(next);
+    const lastMessage = chat.messages[chat.messages.length - 1];
+    if (mode === 'guest' && lastMessage) {
+      updateMessageMeta(sessionId, lastMessage.id, { dismissedReadingIds: [...next] });
+    }
+    setDrawBar(null);
   };
 
   const clarifyCard = async (readingId: string, cardId: string) => {
@@ -624,6 +654,10 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   const activeClarification = useMemo(
     () => activeAskUserPart(chat.messages, staleInteractiveIds, actedConfirms),
     [chat.messages, staleInteractiveIds, actedConfirms],
+  );
+  const plainClarification = useMemo(
+    () => (activeClarification ? null : activePlainClarification(chat.messages, staleInteractiveIds)),
+    [activeClarification, chat.messages, staleInteractiveIds],
   );
   const busy = chat.status === 'submitted' || chat.status === 'streaming';
   const failed = chat.status === 'error';
@@ -846,20 +880,26 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
       {drawBar && (
         <div className="bg-background/95 px-4 pb-2">
           <div className="mx-auto w-full max-w-2xl">
-            <DrawBar cards={drawBar.cards} onComplete={completeDraw} onCancel={() => setDrawBar(null)} />
+          <DrawBar cards={drawBar.cards} onComplete={completeDraw} onCancel={cancelDrawBar} />
           </div>
         </div>
       )}
 
       <div className="bg-background/95 px-4 pt-2 pb-3">
         <div className="mx-auto flex w-full max-w-2xl flex-col gap-2">
-          {activeClarification && !busy && (
+          {activeClarification && !busy ? (
             <ComposerClarification
               part={activeClarification.part}
               onSubmit={(text) => send(text)}
               markActed={(toolCallId) => handleActed(activeClarification.messageId, toolCallId)}
             />
-          )}
+          ) : plainClarification && !busy ? (
+            <ComposerPlainClarification
+              question={plainClarification.question}
+              options={plainClarification.options}
+              onSubmit={(text) => send(text)}
+            />
+          ) : null}
           <AiChatInput
             value={input}
             onValueChange={setInput}

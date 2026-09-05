@@ -148,6 +148,10 @@ export type MessageMeta = {
   // the parts, so acted/dismissed cards stay resolved across remounts.
   actedToolCallIds?: string[];
   declined?: boolean;
+  // Readings whose draw bar the user explicitly closed (persisted on the
+  // guest transcript's last message), so hydration never resurrects a draw
+  // the user walked away from (PRD §25–§26).
+  dismissedReadingIds?: string[];
   [key: string]: unknown;
 };
 

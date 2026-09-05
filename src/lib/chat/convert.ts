@@ -71,6 +71,26 @@ export function staleInteractiveMessageIds(messages: ReadonlyArray<{ id: string;
   return new Set(messages.slice(0, lastUserIndex).filter((m) => m.role === 'assistant').map((m) => m.id));
 }
 
+// A reading without a transcript anchor means navigation (or a reload)
+// interrupted its draw bar mid-reveal (PRD §25). Only the newest reading can
+// still be in progress, and only when it was drawn after the transcript's
+// last event: completed draws are anchored by their [Cards drawn] notice, and
+// anything a later message postdates is history, not an interrupted draw.
+export function pickInterruptedReading(
+  messages: ReadonlyArray<{ meta?: { readingId?: string }; created_at: string }>,
+  readings: Record<string, { createdAt: string }>,
+  dismissedReadingIds: ReadonlySet<string>,
+): string | null {
+  const entries = Object.entries(readings);
+  if (entries.length === 0) return null;
+  const [newestId, newest] = entries[entries.length - 1];
+  if (messages.some((m) => m.meta?.readingId === newestId)) return null;
+  if (dismissedReadingIds.has(newestId)) return null;
+  const last = messages[messages.length - 1];
+  if (last && newest.createdAt <= last.created_at) return null;
+  return newestId;
+}
+
 // The live ask_user batch docks above the composer (PRD §30): newest
 // output-available assistant part that is neither stale (a later user message
 // exists) nor already answered. Malformed payloads stay the component's
@@ -91,6 +111,87 @@ export function activeAskUserPart(
       if (toolPart.state !== 'output-available' || actedToolCallIds.has(toolPart.toolCallId)) continue;
       return { messageId: message.id, part: toolPart };
     }
+  }
+  return null;
+}
+
+export type PlainClarification = {
+  messageId: string;
+  question: string;
+  options: string[];
+};
+
+const READING_LANGUAGE = /\b(?:tarot|cards?|card\s+reading|reading|spread)\b/i;
+
+function extractQuestion(text: string): string | null {
+  const questionLines = text
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.includes('?'));
+  const question = questionLines.at(-1)?.replace(/^\[[^\]]*clarification[^\]]*\]\s*/iu, '').trim();
+  return question || null;
+}
+
+function uniqueOptions(options: string[]): string[] {
+  return [
+    ...new Set(
+      options
+        .map((option) => option.replace(/^(?:and|or)\s+/iu, '').replace(/[.;:]+$/u, '').trim())
+        .filter(Boolean),
+    ),
+  ].slice(0, 5);
+}
+
+function extractOptions(text: string, question: string): string[] {
+  const lines = text.split(/\r?\n/u);
+  const bulletPattern = /^\s*(?:[-*•]|\d+[.)])\s+(.+?)\s*$/u;
+  const questionIndex = lines.findIndex((line) => {
+    const value = line.match(bulletPattern)?.[1] ?? line;
+    return value.replace(/^(?:and|or)\s+/iu, '').replace(/[.;:]+$/u, '').trim() === question;
+  });
+  if (questionIndex >= 0) {
+    const nested: string[] = [];
+    for (const line of lines.slice(questionIndex + 1)) {
+      const match = line.match(bulletPattern);
+      if (!match) continue;
+      if ((line.match(/^\s*/u)?.[0].length ?? 0) <= 1) break;
+      nested.push(match[1]);
+    }
+    if (nested.length >= 2) return uniqueOptions(nested);
+  }
+
+  const bulletOptions = lines
+    .map((line) => line.match(bulletPattern)?.[1])
+    .filter((option): option is string => Boolean(option))
+    .map((option) => option.replace(/^(?:and|or)\s+/iu, '').replace(/[.;:]+$/u, '').trim())
+    .filter((option) => option !== question && !option.endsWith('?'));
+  if (bulletOptions.length >= 2) return uniqueOptions(bulletOptions);
+
+  const inline = question.match(/\b(?:is it|could it be|are you more focused on|do you want to explore)\s+(?:about\s+)?(.+?)\?$/iu)?.[1];
+  if (!inline) return [];
+  return uniqueOptions(inline.split(/\s*,\s*|\s+\bor\b\s+/iu)).filter((option) => option.length <= 200);
+}
+
+export function activePlainClarification(
+  messages: ChatMessage[],
+  staleMessageIds: Set<string>,
+): PlainClarification | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== 'assistant' || staleMessageIds.has(message.id)) continue;
+    if (message.parts.some((part) => part.type === 'tool-ask_user')) continue;
+    const text = joinUiText(message).trim();
+    const question = extractQuestion(text);
+    if (!question) continue;
+    const previousUser = [...messages.slice(0, i)].reverse().find((candidate) => candidate.role === 'user');
+    if (
+      !previousUser ||
+      isSystemNotice(previousUser.metadata) ||
+      !READING_LANGUAGE.test(joinUiText(previousUser))
+    ) {
+      continue;
+    }
+    return { messageId: message.id, question, options: extractOptions(text, question) };
   }
   return null;
 }

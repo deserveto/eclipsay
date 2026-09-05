@@ -208,3 +208,65 @@ export function ComposerClarification({
     </section>
   );
 }
+
+export function ComposerPlainClarification({
+  question,
+  options,
+  onSubmit,
+}: {
+  question: string;
+  options: string[];
+  onSubmit: (text: string) => void;
+}) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const [customValue, setCustomValue] = useState('');
+  const answer = customValue.trim() || selected || '';
+
+  return (
+    <section
+      aria-label="Clarifying question"
+      className="rounded-3xl border border-border bg-card p-4"
+    >
+      <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">One quick question</p>
+      <p className="mt-2 text-[15px] leading-7">{question}</p>
+      {options.length > 0 && (
+        <div className="mt-3 flex flex-col gap-1.5" role="group" aria-label={question}>
+          {options.map((option) => (
+            <button
+              key={option}
+              type="button"
+              aria-pressed={selected === option && customValue.length === 0}
+              onClick={() => {
+                setSelected(option);
+                setCustomValue('');
+              }}
+              className={`rounded-xl border px-3 py-2 text-left text-sm transition-colors motion-reduce:transition-none ${
+                selected === option && customValue.length === 0
+                  ? 'border-primary/40 bg-primary/10 font-medium text-primary'
+                  : 'border-border hover:bg-accent'
+              }`}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+      )}
+      <input
+        type="text"
+        value={customValue}
+        onChange={(event) => {
+          setCustomValue(event.target.value);
+          setSelected(null);
+        }}
+        placeholder={FALLBACK_FREEFORM_LABEL}
+        aria-label={FALLBACK_FREEFORM_LABEL}
+        className="mt-1.5 w-full rounded-xl border border-border bg-transparent px-3 py-2 text-sm transition-colors placeholder:text-muted-foreground motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      />
+      <div className="mt-3 flex justify-end">
+        <Button type="button" size="sm" disabled={answer.length === 0} onClick={() => onSubmit(answer)}>
+          Send answer
+        </Button>
+      </div>
+    </section>
+  );
+}

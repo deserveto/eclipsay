@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   convertToModelMessages,
   createUIMessageStreamResponse,
+  hasToolCall,
   isStepCount,
   streamText,
   toUIMessageStream,
@@ -44,6 +45,15 @@ function joinText(message: UIMessage): string {
 function titleFrom(text: string): string {
   const compact = text.replace(/\s+/g, ' ').trim();
   return compact.length === 0 ? 'New Reflection' : compact.slice(0, 48);
+}
+
+const READING_INTENT = /\b(?:tarot|cards?|card\s+reading|reading|spread)\b/i;
+const SPECIFIC_READING_CONTEXT =
+  /\b(?:about|regarding|whether|between|which|decision|choice|career|work|relationship|family|love|goal|situation|question|feeling|focus|guidance)\b/i;
+
+function requiresStructuredClarification(text: string): boolean {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  return compact.length > 0 && compact.length <= 120 && READING_INTENT.test(compact) && !SPECIFIC_READING_CONTEXT.test(compact);
 }
 
 export async function POST(request: Request) {
@@ -104,6 +114,8 @@ export async function POST(request: Request) {
     }
   }
   const tarotUnavailable = sessionSafety.highStakes;
+  const forceStructuredClarification =
+    !tarotUnavailable && !tarotEvent && requiresStructuredClarification(humanUserText);
   if (tarotUnavailable && tarotEvent) {
     return Response.json({ error: 'tarot_unavailable' }, { status: 403 });
   }
@@ -210,7 +222,11 @@ export async function POST(request: Request) {
       teenUser: isTeenAge(profile?.date_of_birth),
     }),
     messages: await convertToModelMessages(messages),
-    stopWhen: isStepCount(5),
+    // OpenRouter may return reasoning as provider content for routed models;
+    // exclude it at the provider boundary as well as the UI stream boundary.
+    providerOptions: { openrouter: { reasoning: { exclude: true } } },
+    stopWhen: [isStepCount(5), hasToolCall('recommend_reading'), hasToolCall('ask_user')],
+    toolChoice: forceStructuredClarification ? { type: 'tool', toolName: 'ask_user' } : undefined,
     tools,
     experimental_transform: tarotUnavailable ? tarotUnavailableTransform() : undefined,
   });
@@ -274,6 +290,7 @@ export async function POST(request: Request) {
   return createUIMessageStreamResponse({
     stream: toUIMessageStream({
       stream: result.stream,
+      sendReasoning: false,
       onError: (error) => {
         console.error('[chat] stream error', error);
         return 'An error occurred while generating the response.';

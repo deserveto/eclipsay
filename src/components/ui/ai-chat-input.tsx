@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useEffect, useRef, type FormEvent, type KeyboardEvent } from 'react';
 import { ArrowUp, Clock3, LoaderCircle, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -27,22 +27,29 @@ export function AiChatInput({
   placeholder = "Share what's on your mind…",
   className,
 }: AiChatInputProps) {
-  const [focused, setFocused] = useState(false);
   const textareaHeight = useRef(52);
   const formRef = useRef<HTMLFormElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const hasValue = value.trim().length > 0;
-  const expanded = focused || hasValue || busy;
 
+  // Content-driven height with a true reset: zeroing the textarea before
+  // measuring makes scrollHeight report content only (it never reads below
+  // clientHeight), so sending a long message collapses the composer back to
+  // one line instead of sticking at its grown height. The 44px tail always
+  // reserves the action row (Check in / Cards) below the text. The textarea
+  // must never animate its own height: a height transition keeps scrollHeight
+  // pinned to the grown clientHeight during measurement — the form (pill)
+  // animates the resize instead.
   useEffect(() => {
     const form = formRef.current;
     const textarea = textareaRef.current;
-    const nextHeight = textarea ? Math.max(52, Math.min(textarea.scrollHeight, 160)) : textareaHeight.current;
-    textareaHeight.current = nextHeight;
-    if (form) form.style.height = `${expanded ? nextHeight + 44 : 52}px`;
     if (!textarea) return;
+    textarea.style.height = '0px';
+    const nextHeight = Math.max(52, Math.min(textarea.scrollHeight, 160));
+    textareaHeight.current = nextHeight;
     textarea.style.height = `${nextHeight}px`;
-  }, [value, expanded]);
+    if (form) form.style.height = `${nextHeight + 44}px`;
+  }, [value]);
 
   const submit = (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
@@ -60,16 +67,11 @@ export function AiChatInput({
     <form
       ref={formRef}
       aria-busy={busy}
-      data-expanded={expanded}
       onSubmit={submit}
-      onFocusCapture={() => setFocused(true)}
-      onBlurCapture={(event) => {
-        if (!formRef.current?.contains(event.relatedTarget as Node | null)) setFocused(false);
-      }}
       onMouseDown={(event) => {
         if (event.target === formRef.current) textareaRef.current?.focus();
       }}
-      style={{ height: expanded ? textareaHeight.current + 44 : 52 }}
+      style={{ height: textareaHeight.current + 44 }}
       className={cn(
         'relative w-full overflow-hidden rounded-[22px] border border-border bg-card',
         'transition-[height,border-color,box-shadow] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]',
@@ -89,7 +91,7 @@ export function AiChatInput({
         className={cn(
           'absolute inset-x-0 top-0 w-full resize-none overflow-y-auto bg-transparent px-4 py-[15px] pr-14',
           'text-base leading-[22px] text-foreground caret-primary outline-none placeholder:text-muted-foreground',
-          'transition-[height] duration-200 ease-out sm:text-sm motion-reduce:transition-none',
+          'sm:text-sm',
         )}
       />
 

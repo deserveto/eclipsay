@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { ToolUIPart } from 'ai';
 import {
   ComposerClarification,
+  ComposerPlainClarification,
   DECLINE_CHOICE,
   FALLBACK_FREEFORM_LABEL,
   applyCustomAnswer,
@@ -122,5 +123,22 @@ describe('ComposerClarification', () => {
     expect(render({ questions: [] })).toBe('');
     expect(render({ questions: [{ question: 'Nope', options: ['A', 'B'], allowMultiple: false }] })).toBe('');
     expect(render({ questions: [{ question: 'Valid question wording?', options: ['Only one'], allowMultiple: false }] })).toBe('');
+  });
+});
+
+describe('ComposerPlainClarification', () => {
+  it('renders a fallback question with tappable choices and a free-answer control', () => {
+    const html = renderToStaticMarkup(
+      createElement(ComposerPlainClarification, {
+        question: 'What feels most alive about this decision?',
+        options: ['Which path to take', 'What might be in the way'],
+        onSubmit: () => {},
+      }),
+    );
+    expect(html).toContain('aria-label="Clarifying question"');
+    expect(html).toContain('Which path to take');
+    expect(html).toContain('What might be in the way');
+    expect(html).toContain(`placeholder="${FALLBACK_FREEFORM_LABEL}"`);
+    expect(html).toContain('Send answer');
   });
 });

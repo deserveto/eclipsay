@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   convertToModelMessages: vi.fn(async (messages: unknown) => messages),
   createUIMessageStreamResponse: vi.fn(() => new Response('ok')),
   isStepCount: vi.fn(() => ({ stepLimit: 5 })),
+  hasToolCall: vi.fn((toolName: string) => ({ toolName })),
   streamText: vi.fn(() => ({
     stream: 'stream',
     text: Promise.resolve('A grounded reply.'),
@@ -33,6 +34,7 @@ vi.mock('@/lib/supabase/server', () => ({
 vi.mock('ai', () => ({
   convertToModelMessages: mocks.convertToModelMessages,
   createUIMessageStreamResponse: mocks.createUIMessageStreamResponse,
+  hasToolCall: mocks.hasToolCall,
   isStepCount: mocks.isStepCount,
   streamText: mocks.streamText,
   toUIMessageStream: mocks.toUIMessageStream,
@@ -105,6 +107,34 @@ describe('POST /api/chat safety boundary', () => {
     expect(res.status).toBe(200);
     expect(mocks.createTarotTools).toHaveBeenCalledWith({ user: null });
     expect(mocks.streamText).toHaveBeenCalledWith(expect.objectContaining({ tools: { tarot: true } }));
+  });
+
+  it('stops after recommendation or structured clarification and hides reasoning', async () => {
+    await postJson({ messages: [user('u1', 'I feel stuck between two choices.')] });
+
+    const streamOptions = (mocks.streamText.mock.calls[0] as unknown as [Record<string, unknown>])[0] as {
+      stopWhen: unknown;
+      toolChoice?: unknown;
+    };
+    expect(streamOptions.stopWhen).toEqual(
+      expect.arrayContaining([{ toolName: 'recommend_reading' }, { toolName: 'ask_user' }]),
+    );
+    expect(mocks.toUIMessageStream).toHaveBeenCalledWith(
+      expect.objectContaining({ sendReasoning: false }),
+    );
+    expect(mocks.streamText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerOptions: { openrouter: { reasoning: { exclude: true } } },
+      }),
+    );
+  });
+
+  it('requires the structured clarification tool for vague tarot starters', async () => {
+    await postJson({ messages: [user('u1', "I'd like to explore something with a few cards.")] });
+
+    expect(mocks.streamText).toHaveBeenCalledWith(
+      expect.objectContaining({ toolChoice: { type: 'tool', toolName: 'ask_user' } }),
+    );
   });
 
   it('rejects a tarot event when the guest request is already gated', async () => {
