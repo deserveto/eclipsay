@@ -68,19 +68,26 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
 
   let title: string;
   try {
-    const { model } = await getModel('utility');
+    const selection = await getModel('utility');
     const { text } = await generateText({
-      model,
+      ...selection,
       system: titleSystemPrompt(),
       prompt: titlePrompt(userText, assistantText),
     });
     const coercedTitle = coerceTitle(text);
     const guardedTitle = guardGeneratedOutput(coercedTitle, 1);
     if (!guardedTitle || text.trim().length === 0) {
+      console.error('[title] generation rejected', { reason: text.trim().length === 0 ? 'empty_output' : 'output_guard' });
       return Response.json({ error: 'generation_failed' }, { status: 500 });
     }
     title = guardedTitle;
-  } catch {
+  } catch (error) {
+    // Never log raw provider errors: they may contain conversation text.
+    console.error('[title] generation failed', {
+      name: error instanceof Error ? error.name : 'unknown',
+      ...((typeof error === 'object' && error !== null && 'statusCode' in error && typeof error.statusCode === 'number')
+        ? { statusCode: error.statusCode } : {}),
+    });
     // Generation is cosmetic; the placeholder title stays and the client
     // surfaces nothing.
     return Response.json({ error: 'generation_failed' }, { status: 500 });

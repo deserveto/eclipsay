@@ -54,6 +54,19 @@ beforeEach(() => {
 });
 
 describe('POST /api/sessions/:sessionId/title output guard', () => {
+  it('passes the utility provider policy to generation', async () => {
+    const providerOptions = { openrouter: { reasoning: { exclude: true } } };
+    mocks.getModel.mockResolvedValueOnce({ model: 'model', providerOptions });
+    mocks.generateText.mockImplementationOnce(async (options?: unknown) => {
+      const policy = (options as { providerOptions?: unknown }).providerOptions;
+      if (!policy) throw new Error('Missing provider policy');
+      return { text: 'A quiet decision' };
+    });
+    const res = await postJson({ userText: 'A difficult choice' });
+    expect(res.status).toBe(200);
+    expect(mocks.generateText).toHaveBeenCalledWith(expect.objectContaining({ providerOptions }));
+  });
+
   it('returns a normal generated title for guests', async () => {
     mocks.generateText.mockResolvedValue({ text: '  "A quiet decision"  ' });
 

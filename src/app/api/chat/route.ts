@@ -16,6 +16,7 @@ import { CHAT_BUDGETS, chatBodySchema, validateUIMessages } from '@/lib/ai/reque
 import { getAccountSessionSafety } from '@/lib/ai/session-safety';
 import { tarotUnavailableTransform } from '@/lib/ai/tarot-output-guard';
 import { createTarotTools } from '@/lib/ai/tools';
+import { createAskUserRepair } from '@/lib/ai/tool-repair';
 import { clientKey, rateLimit, tooManyRequests } from '@/lib/rate-limit';
 import { createClient, getAuthUser, isSupabaseServerConfigured } from '@/lib/supabase/server';
 import type { MessageMeta, PersistedToolPart, Profile, SpreadId } from '@/lib/types';
@@ -292,6 +293,7 @@ export async function POST(request: Request) {
     stopWhen: [isStepCount(5), hasToolCall('recommend_reading'), hasToolCall('ask_user')],
     toolChoice: forceStructuredClarification ? { type: 'tool', toolName: 'ask_user' } : undefined,
     tools,
+    repairToolCall: tools ? createAskUserRepair(modelSelection) : undefined,
     experimental_transform: tarotUnavailable ? tarotUnavailableTransform() : undefined,
   });
 

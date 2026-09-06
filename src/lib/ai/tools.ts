@@ -64,7 +64,8 @@ export function createTarotTools({ user }: { user: User | null }) {
         questions: z
           .object({
             question: z.string().min(5).max(200),
-            options: z.array(z.string().min(1).max(200)).min(2).max(5),
+            options: z.array(z.string().min(1).max(200)).min(2).max(5)
+              .describe('2–5 plain text answer strings, e.g. ["Workload", "Team relationships"]. Never objects or empty placeholders.'),
             allowMultiple: z.boolean(),
           })
           .array()
