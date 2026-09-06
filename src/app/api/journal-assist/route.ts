@@ -6,6 +6,8 @@ import { classify } from '@/lib/ai/safety';
 import { guardGeneratedOutput } from '@/lib/ai/output-guard';
 import { clientKey, rateLimit, tooManyRequests } from '@/lib/rate-limit';
 
+export const maxDuration = 60;
+
 // AI-assisted journal (PRD §38): generates an AI note; never rewrites the
 // entry body. The client appends the note to entry.ai_notes.
 
