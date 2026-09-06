@@ -106,6 +106,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   const [clarifyingCardId, setClarifyingCardId] = useState<string | null>(null);
   const [declinedToolCalls, setDeclinedToolCalls] = useState<Set<string>>(new Set());
   const [drawBar, setDrawBar] = useState<{ readingId: string; spreadId: string; cards: DrawnCard[] } | null>(null);
+  const [resumableReadingId, setResumableReadingId] = useState<string | null>(null);
   const [dismissedReadings, setDismissedReadingIds] = useState<Set<string>>(new Set());
   const [drawFailedSpread, setDrawFailedSpread] = useState<string | null>(null);
   const [checkInOpen, setCheckInOpen] = useState(false);
@@ -146,9 +147,9 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
       }
       for (const id of m.meta.dismissedReadingIds ?? []) dismissed.add(id);
     }
-    if (acted.size > 0) setActedConfirms(acted);
-    if (declinedToolCallIds.size > 0) setDeclinedToolCalls(declinedToolCallIds);
-    if (dismissed.size > 0) setDismissedReadingIds(dismissed);
+    setActedConfirms(acted);
+    setDeclinedToolCalls(declinedToolCallIds);
+    setDismissedReadingIds(dismissed);
     return dismissed;
   };
 
@@ -161,16 +162,11 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     setNeedsInterpretation(last?.role === 'user' && isSystemNotice(last.metadata));
   };
 
-  // A reading persisted without a transcript anchor means navigation (or a
-  // reload) interrupted the draw mid-bar. The cards are already fixed by the
-  // server seed (PRD §25), so resume the bar instead of losing the draw —
-  // but only the newest reading, and only one drawn after the transcript's
-  // last event, so completed or closed draws never resurrect the bar.
+  // A missing transcript anchor is only evidence of a possible interruption,
+  // not permission to replay the picker. Offer explicit recovery using the
+  // saved cards; reopening history must never start a draw interaction (§26).
   const resumeInterruptedDraw = (messages: StoredMessage[], allReadings: ReadingsState, dismissed: Set<string>) => {
-    const readingId = pickInterruptedReading(messages, allReadings, dismissed);
-    if (!readingId) return;
-    const reading = allReadings[readingId];
-    setDrawBar({ readingId, spreadId: reading.spreadId, cards: reading.cards });
+    setResumableReadingId(pickInterruptedReading(messages, allReadings, dismissed));
   };
 
   const chat = useChat<ChatMessage>({
@@ -209,6 +205,11 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   });
   // Hydrate transcript + readings on deep link (never re-generate, PRD §26).
   useEffect(() => {
+    setDrawBar(null);
+    setResumableReadingId(null);
+    if (resolving) return;
+    let cancelled = false;
+    setLoadError(false);
     const hydrate = async () => {
       // Account mode: messages + readings come from Supabase (RLS-scoped, §34).
       if (mode === 'account' && isSupabaseConfigured()) {
@@ -217,6 +218,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
           supabase.from('messages').select('*').eq('session_id', sessionId).order('created_at'),
           supabase.from('tarot_readings').select('*').eq('session_id', sessionId).order('created_at'),
         ]);
+        if (cancelled) return;
         // Audit A13: a failed read renders an explicit error with retry — it
         // must never look like an empty session or fall back to guest data.
         if (msgs.error || reads.error) {
@@ -224,12 +226,10 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
           return;
         }
         const dbMessages = (msgs.data ?? []) as unknown as StoredMessage[];
-        if (dbMessages.length > 0) {
-          initialMessageIds.current = new Set(dbMessages.map((m) => m.id));
-          chat.setMessages(dbMessages.map(storedToUi));
-          setLastActiveAt(dbMessages[dbMessages.length - 1].created_at);
-          detectUninterpretedDraw(dbMessages.map(storedToUi));
-        }
+        initialMessageIds.current = new Set(dbMessages.map((m) => m.id));
+        chat.setMessages(dbMessages.map(storedToUi));
+        setLastActiveAt(dbMessages.at(-1)?.created_at ?? null);
+        detectUninterpretedDraw(dbMessages.map(storedToUi));
         const dbReadings: ReadingsState = {};
         for (const r of (reads.data ?? []) as unknown as TarotReading[]) {
           dbReadings[r.id] = { spreadId: r.spread_id, cards: r.cards, seed: r.seed, createdAt: r.created_at };
@@ -255,8 +255,9 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
       }
     };
     void hydrate();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, mode, hydrateNonce]);
+  }, [sessionId, mode, resolving, hydrateNonce]);
 
   // Mount-only URL intents (audit A21): `intent=tarot` seeds the tarot
   // starter (optionally naming a spread from Explore), `prefill` carries
@@ -464,6 +465,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
       return;
     }
     commitDraw(payload);
+    setResumableReadingId(null);
     setDrawBar({ readingId: payload.readingId, spreadId: payload.spreadId, cards: payload.cards });
   };
 
@@ -1065,6 +1067,21 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
 
       <div className="bg-background/95 px-4 pt-2 pb-3">
         <div className="mx-auto flex w-full max-w-2xl flex-col gap-2">
+          {resumableReadingId && !drawBar && !tarotUnavailable && !busy && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="self-start"
+              onClick={() => {
+                const reading = readings[resumableReadingId];
+                if (!reading) return;
+                setDrawBar({ readingId: resumableReadingId, spreadId: reading.spreadId, cards: reading.cards });
+                setResumableReadingId(null);
+              }}
+            >
+              Resume reading
+            </Button>
+          )}
           {activeClarification && !busy ? (
             <ComposerClarification
               part={activeClarification.part}
