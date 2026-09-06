@@ -129,7 +129,7 @@ export function ResetPasswordForm() {
         {error && (
           <p role="alert" className="text-sm text-destructive">
             {error}{' '}
-            <Link href="/forgot-password" className="text-primary underline-offset-4 hover:underline">
+            <Link href="/forgot-password" className="text-primary underline underline-offset-4 hover:opacity-80">
               Request a new link
             </Link>
           </p>

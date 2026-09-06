@@ -5,6 +5,7 @@ import { getModel, isAiConfigured } from '@/lib/ai/provider';
 import { createClient, getAuthUser, isSupabaseServerConfigured } from '@/lib/supabase/server';
 import { guardGeneratedOutput } from '@/lib/ai/output-guard';
 import { isSystemNotice } from '@/lib/chat/convert';
+import { clientKey, rateLimit, tooManyRequests } from '@/lib/rate-limit';
 import type { MessageMeta } from '@/lib/types';
 
 // Title generation for a conversation (PRD §34). Works for both modes:
@@ -27,6 +28,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
   if (!isAiConfigured()) {
     return Response.json({ error: 'generation_failed' }, { status: 500 });
   }
+  // Audit A07: anonymous spend control.
+  const limit = rateLimit(clientKey(request, 'title'), 20, 60_000);
+  if (!limit.ok) return tooManyRequests(limit);
   const { sessionId } = await params;
   if (!z.string().uuid().safeParse(sessionId).success) {
     return Response.json({ error: 'invalid_body' }, { status: 400 });
@@ -64,8 +68,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ ses
 
   let title: string;
   try {
+    const { model } = await getModel('utility');
     const { text } = await generateText({
-      model: getModel(),
+      model,
       system: titleSystemPrompt(),
       prompt: titlePrompt(userText, assistantText),
     });

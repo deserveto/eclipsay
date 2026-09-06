@@ -4,6 +4,7 @@ import { getModel, isAiConfigured } from '@/lib/ai/provider';
 import { buildSystemPrompt } from '@/lib/ai/system-prompt';
 import { classify } from '@/lib/ai/safety';
 import { guardGeneratedOutput } from '@/lib/ai/output-guard';
+import { clientKey, rateLimit, tooManyRequests } from '@/lib/rate-limit';
 
 // AI-assisted journal (PRD §38): generates an AI note; never rewrites the
 // entry body. The client appends the note to entry.ai_notes.
@@ -24,7 +25,9 @@ export async function POST(request: Request) {
   if (!isAiConfigured()) {
     return Response.json({ error: 'generation_failed' }, { status: 500 });
   }
-
+  // Audit A07: anonymous spend control.
+  const limit = rateLimit(clientKey(request, 'journal-assist'), 10, 60_000);
+  if (!limit.ok) return tooManyRequests(limit);
   let raw: unknown;
   try {
     raw = await request.json();
@@ -41,8 +44,9 @@ You are assisting inside the person's private journal. ${ACTION_PROMPTS[parsed.d
 Keep it brief (under 150 words). Do not rewrite their entry. Do not claim certainty about their feelings.`;
 
   try {
+    const { model } = await getModel('utility');
     const result = await generateText({
-      model: getModel(),
+      model,
       system,
       prompt: parsed.data.content,
       stopWhen: isStepCount(1),

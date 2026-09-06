@@ -145,8 +145,12 @@ export type MessageMeta = {
   // returned-to session loses every question chip and "Begin reading" card.
   tools?: PersistedToolPart[];
   // Propose-then-confirm state persisted on the assistant message that owns
-  // the parts, so acted/dismissed cards stay resolved across remounts.
+  // the parts, so acted/declined cards stay resolved across remounts —
+  // including account messages (audit A31; keyed by toolCallId).
   actedToolCallIds?: string[];
+  declinedToolCallIds?: string[];
+  // Pre-A31 guests persisted decline per whole message; still read on
+  // hydration.
   declined?: boolean;
   // Readings whose draw bar the user explicitly closed (persisted on the
   // guest transcript's last message), so hydration never resurrects a draw

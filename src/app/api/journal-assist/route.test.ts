@@ -4,7 +4,7 @@ import { POST } from './route';
 const mocks = vi.hoisted(() => ({
   generateText: vi.fn(async () => ({ text: 'A useful reflection note.' })),
   isStepCount: vi.fn(() => ({ stepLimit: 1 })),
-  getModel: vi.fn(() => 'model'),
+  getModel: vi.fn(async () => ({ model: 'model', providerOptions: {} })),
   isAiConfigured: vi.fn(() => true),
   buildSystemPrompt: vi.fn(() => 'system'),
 }));

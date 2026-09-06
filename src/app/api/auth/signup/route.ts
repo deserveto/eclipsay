@@ -39,15 +39,16 @@ export async function POST(request: Request) {
     },
   });
   if (error) {
-    console.error('[signup] failed', error);
-    // Supabase reports duplicate accounts as 422 user_already_exists ("User
-    // already registered") — distinct from transient failures so the form can
-    // route the person to login/recovery instead of a retry loop.
-    const taken =
-      error.status === 422 ||
-      error.code === 'user_already_exists' ||
-      /already (been )?registered/i.test(error.message);
-    return Response.json({ error: taken ? 'email_taken' : 'signup_failed' }, { status: 400 });
+    // Audit (verification review): never confirm whether an email exists.
+    // Supabase reports duplicates as 422 user_already_exists; instead of a
+    // distinct `email_taken` response (an enumeration oracle), we return the
+    // SAME generic verification response the happy path returns. The
+    // existing account's owner gets no email; the prober learns nothing.
+    console.error('[signup] rejected', error.status ?? 'unknown', error.code ?? 'unknown');
+    if (error.status === 422 || error.code === 'user_already_exists' || /already (been )?registered/i.test(error.message)) {
+      return Response.json({ status: 'verification_required' as const, email }, { status: 201 });
+    }
+    return Response.json({ error: 'signup_failed' }, { status: 400 });
   }
 
   // A session here means the project is set to auto-confirm (misconfigured for

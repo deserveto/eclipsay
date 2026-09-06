@@ -31,6 +31,26 @@ export async function POST(request: Request) {
   if (!parsed.success) return Response.json({ error: 'invalid_body' }, { status: 400 });
 
   const supabase = await createClient();
+  // Audit A17: a child row may only reference parents the caller owns — the
+  // composite DB FKs back this up; these checks give the route a clean 403.
+  if (parsed.data.sessionId) {
+    const { data: session } = await supabase
+      .from('reflection_sessions')
+      .select('id')
+      .eq('id', parsed.data.sessionId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+    if (!session) return Response.json({ error: 'forbidden' }, { status: 403 });
+  }
+  if (parsed.data.journalEntryId) {
+    const { data: entry } = await supabase
+      .from('journal_entries')
+      .select('id')
+      .eq('id', parsed.data.journalEntryId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+    if (!entry) return Response.json({ error: 'forbidden' }, { status: 403 });
+  }
   const { data, error } = await supabase
     .from('follow_ups')
     .insert({

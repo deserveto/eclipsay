@@ -8,6 +8,22 @@ export type JournalDraft = {
   tags: string;
 };
 
+export type JournalDraftOwner = string;
+
+/**
+ * Audit A09: drafts are scoped to their owner (`guest`, or the account user
+ * id) AND the entry they belong to. A draft written by one identity is never
+ * restored into another's editor — on shared browsers this keeps account
+ * drafts out of guest hands and vice versa. sessionStorage is the deliberate
+ * privacy policy: drafts die with the tab, never leave the device, and the
+ * composer copy says exactly that.
+ */
+export function guestDraftOwner(): JournalDraftOwner {
+  return 'guest';
+}
+
+type StoredDraft = { owner: JournalDraftOwner; draft: JournalDraft };
+
 function defaultStorage(): Storage | null {
   if (typeof window === 'undefined') return null;
   try {
@@ -29,25 +45,37 @@ function isJournalDraft(value: unknown): value is JournalDraft {
   );
 }
 
-export function readJournalDraft(editId: string | null, storage?: Storage): JournalDraft | null {
-  const target = storage ?? defaultStorage();
-  if (!target) return null;
+function parseStored(raw: string, owner: JournalDraftOwner, editId: string | null): JournalDraft | null {
   try {
-    const raw = target.getItem(JOURNAL_DRAFT_KEY);
-    if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
-    if (!isJournalDraft(parsed) || parsed.editId !== editId) return null;
-    return parsed;
+    if (!parsed || typeof parsed !== 'object') return null;
+    const stored = parsed as Partial<StoredDraft>;
+    if (stored.owner !== owner) return null;
+    if (!isJournalDraft(stored.draft)) return null;
+    return stored.draft.editId === editId ? stored.draft : null;
   } catch {
     return null;
   }
 }
 
-export function writeJournalDraft(draft: JournalDraft, storage?: Storage): boolean {
+export function readJournalDraft(owner: JournalDraftOwner, editId: string | null, storage?: Storage): JournalDraft | null {
+  const target = storage ?? defaultStorage();
+  if (!target) return null;
+  try {
+    const raw = target.getItem(JOURNAL_DRAFT_KEY);
+    if (!raw) return null;
+    return parseStored(raw, owner, editId);
+  } catch {
+    return null;
+  }
+}
+
+export function writeJournalDraft(owner: JournalDraftOwner, draft: JournalDraft, storage?: Storage): boolean {
   const target = storage ?? defaultStorage();
   if (!target) return false;
   try {
-    target.setItem(JOURNAL_DRAFT_KEY, JSON.stringify(draft));
+    const stored: StoredDraft = { owner, draft };
+    target.setItem(JOURNAL_DRAFT_KEY, JSON.stringify(stored));
     return true;
   } catch {
     // Browser storage is optional; the in-memory editor remains authoritative.

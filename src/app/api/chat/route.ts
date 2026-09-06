@@ -1,4 +1,3 @@
-import { z } from 'zod';
 import {
   convertToModelMessages,
   createUIMessageStreamResponse,
@@ -12,34 +11,23 @@ import type { User } from '@supabase/supabase-js';
 import { getModel, isAiConfigured } from '@/lib/ai/provider';
 import { buildSystemPrompt, type MemoryForPrompt } from '@/lib/ai/system-prompt';
 import { isTeenAge } from '@/lib/auth/validation';
-import { classify, classifyTranscript } from '@/lib/ai/safety';
+import { classifyTranscript } from '@/lib/ai/safety';
+import { CHAT_BUDGETS, chatBodySchema, validateUIMessages } from '@/lib/ai/request-validation';
 import { getAccountSessionSafety } from '@/lib/ai/session-safety';
 import { tarotUnavailableTransform } from '@/lib/ai/tarot-output-guard';
 import { createTarotTools } from '@/lib/ai/tools';
+import { clientKey, rateLimit, tooManyRequests } from '@/lib/rate-limit';
 import { createClient, getAuthUser, isSupabaseServerConfigured } from '@/lib/supabase/server';
-import { isSystemNotice } from '@/lib/chat/convert';
 import type { MessageMeta, PersistedToolPart, Profile, SpreadId } from '@/lib/types';
 
 export const maxDuration = 60;
 
-const bodySchema = z.object({
-  sessionId: z.string().uuid().optional(),
-  messages: z.array(z.custom<UIMessage>()).min(1),
-  // Guest memories (PRD §13, §41): the client vouches with an explicit
-  // snapshot per request; the server sanitizes before any prompt use.
-  guestMemory: z
-    .object({
-      enabled: z.boolean(),
-      items: z.array(z.object({ category: z.string(), content: z.string() })).max(20),
-    })
-    .optional(),
-});
-
 function joinText(message: UIMessage): string {
-  return message.parts
-    .filter((part): part is Extract<UIMessage['parts'][number], { type: 'text' }> => part.type === 'text')
-    .map((part) => part.text)
-    .join('');
+  let text = '';
+  for (const part of message.parts) {
+    if (part.type === 'text') text += part.text;
+  }
+  return text;
 }
 
 function titleFrom(text: string): string {
@@ -56,33 +44,57 @@ function requiresStructuredClarification(text: string): boolean {
   return compact.length > 0 && compact.length <= 120 && READING_INTENT.test(compact) && !SPECIFIC_READING_CONTEXT.test(compact);
 }
 
+// Tool outputs are produced by our own tool factories (tools.ts) — these are
+// the persistence boundary's named contracts.
+type RecommendReadingOutput = { recommendedSpreadId: SpreadId; context?: string };
+type ClarifyOutput = { readingId: string; cardId: string; clarifier?: { cardId: string } };
+
 export async function POST(request: Request) {
   if (!isAiConfigured()) {
     return Response.json({ error: 'generation_failed' }, { status: 500 });
   }
 
+  // Audit A07: anonymous spend control before any expensive work.
+  const limit = rateLimit(clientKey(request, 'chat'), 30, 5 * 60_000);
+  if (!limit.ok) return tooManyRequests(limit);
+
+  // Audit A06: bound the raw payload before parsing it.
+  let rawText: string;
+  try {
+    rawText = await request.text();
+  } catch {
+    return Response.json({ error: 'invalid_json' }, { status: 400 });
+  }
+  if (rawText.length > CHAT_BUDGETS.maxBodyChars) {
+    return Response.json({ error: 'payload_too_large' }, { status: 413 });
+  }
   let raw: unknown;
   try {
-    raw = await request.json();
+    raw = JSON.parse(rawText) as unknown;
   } catch {
     return Response.json({ error: 'invalid_json' }, { status: 400 });
   }
 
-  const parsed = bodySchema.safeParse(raw);
+  const parsed = chatBodySchema.safeParse(raw);
   if (!parsed.success) {
     return Response.json({ error: 'invalid_body' }, { status: 400 });
   }
-  const { sessionId, messages, guestMemory } = parsed.data;
+  const { sessionId, messages, guestMemory, guestAdultConfirmed } = parsed.data;
+  // Audit A06: structural validation with budgets — malformed shapes must
+  // return a structured 400, never reach provider conversion.
+  const messagesCheck = validateUIMessages(messages);
+  if (!messagesCheck.ok) {
+    return Response.json({ error: 'invalid_body' }, { status: 400 });
+  }
+  const uiMessages = messages as unknown as UIMessage[];
 
-  const lastUser = [...messages].reverse().find((m) => m.role === 'user');
-  const humanUserMessages = messages.filter(
-    (message) => message.role === 'user' && !isSystemNotice((message.metadata ?? {}) as MessageMeta),
-  );
-  const lastHumanUser = [...humanUserMessages].reverse()[0];
+  const lastUser = [...uiMessages].reverse().find((m) => m.role === 'user');
+  // Audit A27: metadata is client-controlled and must never gate the safety
+  // classifier. Every user message's text is classified, including tarot
+  // event notices — their card summaries are benign, and over-matching is safe.
+  const userMessages = uiMessages.filter((message) => message.role === 'user');
   const userText = lastUser ? joinText(lastUser) : '';
-  const humanUserText = lastHumanUser ? joinText(lastHumanUser) : '';
-  const currentSafety = classify(humanUserText);
-  const requestSessionSafety = classifyTranscript(humanUserMessages.map(joinText));
+  const requestSessionSafety = classifyTranscript(userMessages.map(joinText));
   // Tarot event notices (PRD §25, §32): the client announces a draw or a
   // clarification draw as bracketed data. The interpret directive is injected
   // into the system prompt so the notice's wording never sets the reply
@@ -98,6 +110,10 @@ export async function POST(request: Request) {
   }
 
   const effectiveSessionId = sessionId;
+  // Audit A29: the STICKY session policy — request transcript plus, for
+  // accounts, everything already stored on the session — drives tools AND
+  // the system prompt, so a neutral follow-up after high-stakes content keeps
+  // the grounded-response instructions.
   let sessionSafety = requestSessionSafety;
   if (user) {
     if (!effectiveSessionId) {
@@ -115,7 +131,7 @@ export async function POST(request: Request) {
   }
   const tarotUnavailable = sessionSafety.highStakes;
   const forceStructuredClarification =
-    !tarotUnavailable && !tarotEvent && requiresStructuredClarification(humanUserText);
+    !tarotUnavailable && !tarotEvent && requiresStructuredClarification(userText);
   if (tarotUnavailable && tarotEvent) {
     return Response.json({ error: 'tarot_unavailable' }, { status: 403 });
   }
@@ -148,7 +164,7 @@ export async function POST(request: Request) {
         memory_enabled: true,
         created_at: new Date().toISOString(),
       };
-    await supabase.from('profiles').upsert(seedProfile);
+      await supabase.from('profiles').upsert(seedProfile);
     }
 
     // Approved memories feed the prompt only when memory_enabled (PRD §59).
@@ -172,18 +188,46 @@ export async function POST(request: Request) {
       const { error } = await supabase.from('reflection_sessions').insert({
         id: effectiveSessionId,
         user_id: user.id,
-        title: titleFrom(humanUserText),
+        title: titleFrom(userText),
       });
       if (error) return Response.json({ error: 'session_create_failed' }, { status: 500 });
     }
-    const { error } = await supabase.from('messages').insert({
-      session_id: effectiveSessionId,
-      user_id: user.id,
-      role: 'user',
-      content: userText,
-      meta: lastMeta,
-    });
-    if (error) return Response.json({ error: 'persist_failed' }, { status: 500 });
+
+    // Audit A32: persist each user turn once by its stable client message id.
+    // Retries/regeneration replay the same transcript; the unique index on
+    // (session_id, client_id) makes duplicate rows impossible.
+    const clientId = typeof lastUser?.id === 'string' ? lastUser.id : null;
+    if (clientId) {
+      const { data: alreadyPersisted } = await supabase
+        .from('messages')
+        .select('id')
+        .eq('session_id', effectiveSessionId)
+        .eq('client_id', clientId)
+        .maybeSingle();
+      if (!alreadyPersisted) {
+        const { error } = await supabase.from('messages').insert({
+          session_id: effectiveSessionId,
+          user_id: user.id,
+          role: 'user',
+          content: userText,
+          meta: lastMeta,
+          client_id: clientId,
+        });
+        // A concurrent request may have won the idempotent insert; stream anyway.
+        if (error && error.code !== '23505') {
+          return Response.json({ error: 'persist_failed' }, { status: 500 });
+        }
+      }
+    } else {
+      const { error } = await supabase.from('messages').insert({
+        session_id: effectiveSessionId,
+        user_id: user.id,
+        role: 'user',
+        content: userText,
+        meta: lastMeta,
+      });
+      if (error) return Response.json({ error: 'persist_failed' }, { status: 500 });
+    }
   } else if (guestMemory?.enabled) {
     // Guests keep data client-side (PRD §13); memories reach the prompt only when
     // this request explicitly opts in, sanitized like the account path (PRD §59).
@@ -194,7 +238,7 @@ export async function POST(request: Request) {
   }
 
   let approvedContext: { title: string; body: string }[] = [];
-  const approvedMeta = (lastHumanUser?.metadata ?? {}) as { approvedContext?: { entryId: string }[] };
+  const approvedMeta = (lastUser?.metadata ?? {}) as { approvedContext?: { entryId: string }[] };
   const approvedIds = (approvedMeta.approvedContext ?? []).map((c) => c.entryId).filter(Boolean);
   if (user && approvedIds.length > 0 && isSupabaseServerConfigured()) {
     const supabase = await createClient();
@@ -208,23 +252,43 @@ export async function POST(request: Request) {
 
   const tools = tarotUnavailable ? undefined : createTarotTools({ user });
 
+  let modelSelection;
+  try {
+    modelSelection = await getModel('chat');
+  } catch {
+    return Response.json({ error: 'generation_failed' }, { status: 500 });
+  }
+
+  let modelMessages;
+  try {
+    modelMessages = await convertToModelMessages(uiMessages);
+  } catch {
+    // Audit A06: a payload that passed budget checks but not SDK conversion
+    // is still a client error — structured 400, not a 500.
+    return Response.json({ error: 'invalid_body' }, { status: 400 });
+  }
+
   const result = streamText({
-    model: getModel(),
+    model: modelSelection.model,
     system: buildSystemPrompt({
       profile,
       memories,
-      safety: currentSafety,
+      // Audit A29: sticky session safety, not just the current message.
+      safety: sessionSafety,
       approvedContext,
       tarotEvent,
       tarotUnavailable,
       // Privacy boundary (plan: Accounts §7): only the derived 13–17 band
       // crosses into the prompt — never the birth date, full name, or email.
-      teenUser: isTeenAge(profile?.date_of_birth),
+      // Audit A36: guests are treated conservatively (teen) unless this
+      // browser explicitly completed the age step as adult.
+      teenUser: user ? isTeenAge(profile?.date_of_birth) : guestAdultConfirmed !== true,
     }),
-    messages: await convertToModelMessages(messages),
-    // OpenRouter may return reasoning as provider content for routed models;
-    // exclude it at the provider boundary as well as the UI stream boundary.
-    providerOptions: { openrouter: { reasoning: { exclude: true } } },
+    messages: modelMessages,
+    // Reasoning policy (effort + payload exclusion) lives in the provider
+    // seam; the UI stream boundary also strips reasoning parts.
+    providerOptions: modelSelection.providerOptions,
+    maxOutputTokens: modelSelection.maxOutputTokens,
     stopWhen: [isStepCount(5), hasToolCall('recommend_reading'), hasToolCall('ask_user')],
     toolChoice: forceStructuredClarification ? { type: 'tool', toolName: 'ask_user' } : undefined,
     tools,
@@ -239,9 +303,9 @@ export async function POST(request: Request) {
       try {
         const [text, responseMessages] = await Promise.all([result.text, result.responseMessages]);
         const meta: MessageMeta = {
-          // Persist the crisis classification so surfaces can react on load
-          // without re-classifying (plan: Safety classifier).
-          ...(currentSafety.crisis ? { crisis: true } : {}),
+          // Persist the sticky crisis classification so surfaces can react on
+          // load without re-classifying (plan: Safety classifier, audit A29).
+          ...(sessionSafety.crisis ? { crisis: true } : {}),
         };
         // Serialize every static tool part so question chips, recommendation
         // cards, and confirm proposals re-render on hydration (PRD §62).
@@ -256,18 +320,18 @@ export async function POST(request: Request) {
               state: 'output-available',
               output: part.output,
             });
-            const output = part.output as Record<string, unknown> | undefined;
-            if (part.toolName === 'recommend_reading' && output?.recommendedSpreadId) {
+            const output = part.output as unknown as RecommendReadingOutput | ClarifyOutput | undefined;
+            if (part.toolName === 'recommend_reading' && output && 'recommendedSpreadId' in output) {
               meta.readingRecommendation = {
-                recommendedSpreadId: output.recommendedSpreadId as SpreadId,
-                context: (output.context as string) ?? '',
+                recommendedSpreadId: output.recommendedSpreadId,
+                context: output.context ?? '',
               };
             }
-            if (part.toolName === 'request_clarification' && output?.clarifier) {
+            if (part.toolName === 'request_clarification' && output && 'clarifier' in output && output.clarifier) {
               meta.clarify = {
-                readingId: output.readingId as string,
-                targetCardId: output.cardId as string,
-                clarifierCardId: (output.clarifier as { cardId: string }).cardId,
+                readingId: output.readingId,
+                targetCardId: output.cardId,
+                clarifierCardId: output.clarifier.cardId,
               };
             }
           }
@@ -292,7 +356,7 @@ export async function POST(request: Request) {
       stream: result.stream,
       sendReasoning: false,
       onError: (error) => {
-        console.error('[chat] stream error', error);
+        console.error('[chat] stream error', error instanceof Error ? error.message : 'unknown');
         return 'An error occurred while generating the response.';
       },
     }),

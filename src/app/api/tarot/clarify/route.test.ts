@@ -3,12 +3,21 @@ import { POST } from './route';
 
 const mocks = vi.hoisted(() => {
   class MockDrawError extends Error {}
+  const ownershipResult = Promise.resolve({ data: { id: 'reading-1' }, error: null });
+  const ownershipQuery = {
+    select: () => ({
+      eq: () => ({
+        eq: () => ({ maybeSingle: () => ownershipResult }),
+      }),
+    }),
+  };
   return {
     DrawError: MockDrawError,
     clarifyReading: vi.fn(async () => ({ cardId: 'the_star', name: 'The Star', orientation: 'upright' })),
     getAccountSessionSafety: vi.fn(async () => ({ highStakes: false, crisis: false })),
     getAuthUser: vi.fn(async (): Promise<{ id: string } | null> => null),
     isSupabaseServerConfigured: vi.fn(() => false),
+    createClient: vi.fn(async () => ({ from: () => ownershipQuery })),
   };
 });
 
@@ -17,6 +26,8 @@ vi.mock('@/lib/ai/session-safety', () => ({ getAccountSessionSafety: mocks.getAc
 vi.mock('@/lib/supabase/server', () => ({
   getAuthUser: mocks.getAuthUser,
   isSupabaseServerConfigured: mocks.isSupabaseServerConfigured,
+  // Audit A34: the route verifies reading ownership before drawing.
+  createClient: mocks.createClient,
 }));
 
 const sessionId = '00000000-0000-4000-8000-000000000001';

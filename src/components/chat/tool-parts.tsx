@@ -8,12 +8,14 @@ import { DECLINE_CHOICE, isQuestionBatch, type ClarificationQuestion } from '@/c
 export type SearchHit = { entryId: string; title: string; createdAt?: string };
 
 type ConfirmHandlers = {
-  onSaveInsight: (text: string) => void;
+  actedIds: Set<string>;
+  markActed: (toolCallId: string) => void;
+  approvedEntryIds: Set<string>;
+  onSaveInsight: (text: string) => Promise<boolean>;
   onRememberThis: (content: string, category: string) => Promise<boolean>;
   onBringItIn: (hit: SearchHit) => void;
-  markActed: (toolCallId: string) => void;
-  actedIds: Set<string>;
-  approvedEntryIds: Set<string>;
+  onScheduleFollowUp: (dueAt: string) => Promise<boolean>;
+  onClarifyRequest: (readingId: string, cardId: string) => Promise<boolean>;
 };
 
 // Typed renderers for streamed tool parts (plan: Phase 2.7 / Phase 3).
@@ -37,7 +39,7 @@ function RecommendationCard({
   stale: boolean;
   tarotUnavailable: boolean;
   onBeginReading: (spreadId: string) => void;
-  onDecline: () => void;
+  onDecline: (toolCallId: string) => void;
   markActed: (toolCallId: string) => void;
 }) {
   if (part.state !== 'output-available' || declined) return null;
@@ -112,7 +114,7 @@ function RecommendationCard({
             <button
               type="button"
               className="mt-2.5 block text-xs text-white/70 underline underline-offset-4 hover:text-white"
-              onClick={onDecline}
+              onClick={() => onDecline(part.toolCallId)}
             >
               Not now
             </button>
@@ -155,28 +157,63 @@ function AskUserHistory({
 
 function ClarifyResultPart({
   part,
-  onClarifyRetry,
+  acted,
+  stale,
+  onClarifyRequest,
+  markActed,
 }: {
   part: ToolUIPart;
-  onClarifyRetry: (readingId: string, cardId: string) => void;
+  acted: boolean;
+  stale: boolean;
+  onClarifyRequest: (readingId: string, cardId: string) => Promise<boolean>;
+  markActed: (toolCallId: string) => void;
 }) {
   if (part.state !== 'output-available') {
-    return <p className="text-sm text-muted-foreground">Drawing a clarification card…</p>;
+    return <p className="text-sm text-muted-foreground">Suggesting a clarification card…</p>;
   }
   const output = part.output as
-    | { error?: string; readingId?: string; clarifier?: { name: string; orientation: string }; cardId?: string }
+    | { error?: string; readingId?: string; clarifier?: { name: string; orientation: string }; cardId?: string; requested?: boolean }
     | undefined;
   if (output?.error) {
     if (typeof output.readingId !== 'string' || typeof output.cardId !== 'string') {
       return <DrawFailedCard />;
     }
-    return <DrawFailedCard onRetry={() => onClarifyRetry(output.readingId!, output.cardId!)} />;
+    return <DrawFailedCard onRetry={() => void onClarifyRequest(output.readingId!, output.cardId!)} />;
   }
-  if (!output?.clarifier) return null;
+  // Legacy hydrated parts carried the drawn card directly (pre-A34); keep
+  // rendering them as settled history.
+  if (output?.clarifier) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        ↷ {output.clarifier.name} ({output.clarifier.orientation}) was drawn to clarify this card.
+      </p>
+    );
+  }
+  if (acted) {
+    return <p className="text-xs text-muted-foreground">↷ Clarification card added to the reading.</p>;
+  }
+  if (stale || !output?.requested || typeof output?.readingId !== 'string' || typeof output?.cardId !== 'string') {
+    return null;
+  }
   return (
-    <p className="text-xs text-muted-foreground">
-      ↷ {output.clarifier.name} ({output.clarifier.orientation}) was drawn to clarify this card.
-    </p>
+    <div className="rounded-xl border border-border bg-card px-4 py-3">
+      <p className="text-sm">
+        One more card could clarify <span className="font-medium">{output.cardId.replace(/_/g, ' ')}</span>.
+      </p>
+      <div className="mt-2 flex gap-2">
+        <button
+          type="button"
+          className="rounded-lg bg-secondary px-3 py-1.5 text-xs transition-opacity hover:opacity-90 disabled:opacity-60"
+          onClick={() => {
+            void onClarifyRequest(output.readingId!, output.cardId!).then((drawn) => {
+              if (drawn) markActed(part.toolCallId);
+            });
+          }}
+        >
+          Draw clarification card
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -187,14 +224,18 @@ function InsightConfirmCard({
   actedIds,
 }: {
   part: ToolUIPart;
-  onSaveInsight: (text: string) => void;
+  onSaveInsight: (text: string) => Promise<boolean>;
   markActed: (toolCallId: string) => void;
   actedIds: Set<string>;
 }) {
+  // Audit A30: the proposal resolves only after persistence SUCCEEDS — a
+  // failed save keeps the card actionable for retry, never a false "Saved".
+  const [pending, setPending] = useState(false);
   if (part.state !== 'output-available') return null;
   const output = part.output as { insightId?: string; text?: string } | undefined;
   if (!output?.insightId || !output.text) return null;
   const acted = actedIds.has(part.toolCallId);
+  const disabled = acted || pending;
   return (
     <div className="rounded-xl border border-primary/40 bg-primary/5 px-4 py-3">
       <p className="text-xs font-medium tracking-wide text-primary uppercase">Insight</p>
@@ -202,14 +243,72 @@ function InsightConfirmCard({
       <div className="mt-2 flex gap-2">
         <button
           type="button"
-          disabled={acted}
+          disabled={disabled}
           className="rounded-lg bg-primary px-3 py-1.5 text-xs text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
-          onClick={() => {
-            markActed(part.toolCallId);
-            onSaveInsight(output.text!);
+          onClick={async () => {
+            setPending(true);
+            try {
+              const saved = await onSaveInsight(output.text!);
+              if (saved) markActed(part.toolCallId);
+            } finally {
+              setPending(false);
+            }
           }}
         >
-          {acted ? 'Saved' : 'Save insight'}
+          {acted ? 'Saved' : pending ? 'Saving…' : 'Save insight'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function FollowUpConfirmCard({
+  part,
+  onScheduleFollowUp,
+  markActed,
+  actedIds,
+}: {
+  part: ToolUIPart;
+  onScheduleFollowUp: (dueAt: string) => Promise<boolean>;
+  markActed: (toolCallId: string) => void;
+  actedIds: Set<string>;
+}) {
+  // Audit A33: the model can propose a follow-up; this card is its only
+  // confirmation path. The due date is validated before the write is offered.
+  const [pending, setPending] = useState(false);
+  if (part.state !== 'output-available') {
+    return <p className="text-sm text-muted-foreground">Preparing a check-in suggestion…</p>;
+  }
+  const output = part.output as { followupId?: string; dueAt?: string; error?: string } | undefined;
+  if (output?.error || !output?.dueAt || Number.isNaN(new Date(output.dueAt).getTime())) {
+    return null;
+  }
+  const acted = actedIds.has(part.toolCallId);
+  const due = new Date(output.dueAt);
+  const dueLabel = due.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  const disabled = acted || pending;
+  return (
+    <div className="rounded-xl border border-border bg-card px-4 py-3">
+      <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Check in later</p>
+      <p className="mt-1 text-sm leading-6">
+        I can nudge you to revisit this reflection around {dueLabel} — right here in the app. No email, no pressure.
+      </p>
+      <div className="mt-2 flex gap-2">
+        <button
+          type="button"
+          disabled={disabled}
+          className="rounded-lg bg-secondary px-3 py-1.5 text-xs transition-opacity hover:opacity-90 disabled:opacity-60"
+          onClick={async () => {
+            setPending(true);
+            try {
+              const saved = await onScheduleFollowUp(output.dueAt!);
+              if (saved) markActed(part.toolCallId);
+            } finally {
+              setPending(false);
+            }
+          }}
+        >
+          {acted ? 'Scheduled' : pending ? 'Scheduling…' : 'Schedule it'}
         </button>
       </div>
     </div>
@@ -309,24 +408,23 @@ function SearchJournalCard({
 
 export function ToolPartRenderer({
   message,
-  declined,
+  declinedToolCallIds,
   stale,
   tarotUnavailable,
   dockedToolCallId,
+
   onBeginReading,
   onDecline,
-  onClarifyRetry,
   confirm,
 }: {
   message: ChatMessage;
-  declined: boolean;
+  declinedToolCallIds: Set<string>;
   stale: boolean;
   tarotUnavailable?: boolean;
   /** The live ask_user batch renders docked above the composer; it renders nothing here. */
   dockedToolCallId?: string;
   onBeginReading: (spreadId: string) => void;
-  onDecline: () => void;
-  onClarifyRetry: (readingId: string, cardId: string) => void;
+  onDecline: (messageId: string, toolCallId: string) => void;
   confirm: ConfirmHandlers;
 }) {
   return (
@@ -350,23 +448,34 @@ export function ToolPartRenderer({
                 <RecommendationCard
                   key={part.toolCallId}
                   part={part}
-                  declined={declined}
+                  declined={declinedToolCallIds.has(part.toolCallId)}
                   acted={confirm.actedIds.has(part.toolCallId)}
                   stale={stale}
                   tarotUnavailable={tarotUnavailable ?? false}
                   onBeginReading={onBeginReading}
-                  onDecline={onDecline}
+                  onDecline={(toolCallId) => onDecline(message.id, toolCallId)}
                   markActed={confirm.markActed}
                 />
               );
             case 'tool-request_clarification':
-              return <ClarifyResultPart key={part.toolCallId} part={part} onClarifyRetry={onClarifyRetry} />;
+              return (
+                <ClarifyResultPart
+                  key={part.toolCallId}
+                  part={part}
+                  acted={confirm.actedIds.has(part.toolCallId)}
+                  stale={stale}
+                  onClarifyRequest={confirm.onClarifyRequest}
+                  markActed={confirm.markActed}
+                />
+              );
             case 'tool-propose_insight':
               return <InsightConfirmCard key={part.toolCallId} part={part} onSaveInsight={confirm.onSaveInsight} markActed={confirm.markActed} actedIds={confirm.actedIds} />;
             case 'tool-propose_memory':
               return <MemoryConfirmCard key={part.toolCallId} part={part} onRememberThis={confirm.onRememberThis} markActed={confirm.markActed} actedIds={confirm.actedIds} />;
             case 'tool-search_journal':
               return <SearchJournalCard key={part.toolCallId} part={part} onBringItIn={confirm.onBringItIn} approvedEntryIds={confirm.approvedEntryIds} />;
+            case 'tool-create_followup':
+              return <FollowUpConfirmCard key={part.toolCallId} part={part} onScheduleFollowUp={confirm.onScheduleFollowUp} markActed={confirm.markActed} actedIds={confirm.actedIds} />;
             default:
               return (
                 <div

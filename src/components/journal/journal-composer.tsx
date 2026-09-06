@@ -9,10 +9,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { appendAiNote, listEntries, makeEntry, persistEntry, removeEntry } from '@/lib/journal/entries';
-import { clearJournalDraft, readJournalDraft, writeJournalDraft, type JournalDraft } from '@/lib/journal/drafts';
+import { EntryDeletedError, appendAiNote, listEntries, makeEntry, persistEntry, removeEntry } from '@/lib/journal/entries';
+import { clearJournalDraft, guestDraftOwner, readJournalDraft, writeJournalDraft, type JournalDraft } from '@/lib/journal/drafts';
 import { guestSaveToast } from '@/lib/account-nudge';
 import { useDataMode } from '@/hooks/use-data-mode';
+import { createClient } from '@/lib/supabase/client';
 import type { AiNoteType, JournalEntry, Mood } from '@/lib/types';
 import { toast } from 'sonner';
 
@@ -25,15 +26,19 @@ const ASSIST_ACTIONS: { type: AiNoteType; label: string }[] = [
   { type: 'summary', label: 'Summarize what I\u2019m feeling' },
 ];
 
+// Audit A20: an edit target loads asynchronously — the form stays closed
+// until the entry resolved, and "missing"/"error" are explicit states.
+type LoadState = 'loading' | 'ready' | 'missing' | 'error';
+
 function normalizeDraft(draft: JournalDraft): JournalDraft {
   return {
     editId: draft.editId,
     title: draft.title.trim(),
-    body: draft.body.trim(),
-    mood: draft.mood.trim(),
+    body: draft.body,
+    mood: draft.mood,
     tags: draft.tags
       .split(',')
-      .map((tag) => tag.trim())
+      .map((t) => t.trim())
       .filter(Boolean)
       .join(', '),
   };
@@ -41,7 +46,7 @@ function normalizeDraft(draft: JournalDraft): JournalDraft {
 
 function ComposerInner() {
   const router = useRouter();
-  const { mode } = useDataMode();
+  const { mode, resolving } = useDataMode();
   const searchParams = useSearchParams();
   const editId = searchParams.get('id');
 
@@ -52,13 +57,17 @@ function ComposerInner() {
   const [tags, setTags] = useState('');
   const [busy, setBusy] = useState(false);
   const [assistBusy, setAssistBusy] = useState<AiNoteType | null>(null);
-  const [hydrated, setHydrated] = useState(false);
+  const [loadState, setLoadState] = useState<LoadState>('loading');
   const [draftSaved, setDraftSaved] = useState(false);
+  // Audit A09: drafts carry their owner (guest vs account user id) inside the
+  // stored payload; reads only restore drafts written by the same identity.
+  const [draftOwner, setDraftOwner] = useState<string>(guestDraftOwner());
+  const [hydrateNonce, setHydrateNonce] = useState(0);
   const draftTimer = useRef<number | null>(null);
 
   useEffect(() => {
     let active = true;
-    setHydrated(false);
+    setLoadState(editId ? 'loading' : 'ready');
     setDraftSaved(false);
     if (draftTimer.current !== null) {
       window.clearTimeout(draftTimer.current);
@@ -80,29 +89,49 @@ function ComposerInner() {
       setBody(values.body);
       setMood((values.mood as Mood) || '');
       setTags(values.tags);
-      setHydrated(true);
+      setLoadState(nextEntry || !editId ? 'ready' : 'missing');
     };
 
-    if (!editId) {
-      applyValues(null, mode === 'guest' ? readJournalDraft(null) : null);
-      return () => {
-        active = false;
-      };
-    }
+    const resolveOwner = async (): Promise<string> => {
+      // Audit A09: the owner must be resolved BEFORE any draft is read or
+      // written, so an account user never inherits a guest draft (or the
+      // reverse). Guests resolve synchronously.
+      if (mode !== 'account') return guestDraftOwner();
+      try {
+        const {
+          data: { user },
+        } = await createClient().auth.getUser();
+        return user?.id ?? guestDraftOwner();
+      } catch {
+        return guestDraftOwner();
+      }
+    };
 
-    listEntries()
-      .then((entries) => {
-        const found = entries.find((e) => e.id === editId) ?? null;
-        const savedDraft = found && mode === 'guest' ? readJournalDraft(editId) : null;
-        applyValues(found, savedDraft);
-      })
-      .catch(() => {
-        if (active) setHydrated(true);
-      });
+    const hydrate = async () => {
+      const owner = await resolveOwner();
+      if (!active) return;
+      setDraftOwner(owner);
+      if (!editId) {
+        applyValues(null, readJournalDraft(owner, null));
+        return;
+      }
+      const result = await listEntries();
+      if (!active) return;
+      if (result.status === 'error') {
+        // Audit A13: a failed read is an explicit error state with retry —
+        // never an empty editor masquerading as a missing entry.
+        setLoadState('error');
+        return;
+      }
+      const found = result.entries.find((e) => e.id === editId) ?? null;
+      applyValues(found, found ? readJournalDraft(owner, editId) : null);
+    };
+
+    if (!resolving) void hydrate();
     return () => {
       active = false;
     };
-  }, [editId, mode]);
+  }, [editId, mode, resolving, hydrateNonce]);
 
   const currentDraft: JournalDraft = { editId, title, body, mood, tags };
   const persistedDraft: JournalDraft = {
@@ -112,12 +141,12 @@ function ComposerInner() {
     mood: entry?.mood ?? '',
     tags: entry?.tags.join(', ') ?? '',
   };
-  const guestDraftDirty =
-    hydrated && JSON.stringify(normalizeDraft(currentDraft)) !== JSON.stringify(normalizeDraft(persistedDraft));
+  const draftDirty =
+    loadState === 'ready' && JSON.stringify(normalizeDraft(currentDraft)) !== JSON.stringify(normalizeDraft(persistedDraft));
 
   useEffect(() => {
-    if (!hydrated || mode !== 'guest') return;
-    if (!guestDraftDirty) {
+    if (resolving || loadState !== 'ready') return;
+    if (!draftDirty) {
       clearJournalDraft();
       setDraftSaved(false);
       return;
@@ -125,7 +154,10 @@ function ComposerInner() {
 
     setDraftSaved(false);
     draftTimer.current = window.setTimeout(() => {
-      if (writeJournalDraft({ editId, title, body, mood, tags })) {
+      // Audit A09: drafts persist for BOTH modes (device-local, per owner +
+      // entry), so account users lose nothing when the exit message points
+      // them to the draft.
+      if (writeJournalDraft(draftOwner, { editId, title, body, mood, tags })) {
         setDraftSaved(true);
       }
       draftTimer.current = null;
@@ -137,10 +169,10 @@ function ComposerInner() {
         draftTimer.current = null;
       }
     };
-  }, [body, editId, entry, guestDraftDirty, hydrated, mode, mood, tags, title]);
+  }, [body, draftDirty, draftOwner, editId, loadState, mode, mood, resolving, tags, title]);
 
   const save = async () => {
-    if (body.trim().length === 0) return;
+    if (body.trim().length === 0 || loadState !== 'ready') return;
     setBusy(true);
     try {
       const base =
@@ -161,10 +193,8 @@ function ComposerInner() {
         updated_at: new Date().toISOString(),
       };
       await persistEntry(updated);
-      if (mode === 'guest') {
-        clearJournalDraft();
-        setDraftSaved(false);
-      }
+      clearJournalDraft();
+      setDraftSaved(false);
       if (mode === 'guest') {
         // Value moment after a local save (PRD §14, plan: Accounts §5).
         guestSaveToast('Saved to your journal.', router.push);
@@ -190,18 +220,30 @@ function ComposerInner() {
       });
       if (!res.ok) throw new Error();
       const { note } = (await res.json()) as { note: string };
-      const updated = await appendAiNote(entry, type, note);
+      // Audit A02: the note lands on the entry's CURRENT state — a save that
+      // happened while the assist ran is preserved, and a deleted entry makes
+      // the append fail instead of resurrecting the row.
+      const updated = await appendAiNote(entry.id, type, note);
       setEntry(updated);
       toast.success('AI note added below — your entry is unchanged.');
-    } catch {
-      toast.error('The assist did not work just now. Try again in a moment.');
+    } catch (error) {
+      if (error instanceof EntryDeletedError) {
+        toast.error('This entry was just deleted — the AI note was not added.');
+        setLoadState('missing');
+        setEntry(null);
+      } else {
+        toast.error('The assist did not work just now. Try again in a moment.');
+      }
     } finally {
       setAssistBusy(null);
     }
   };
 
   const confirmExit = () =>
-    body.trim().length === 0 || window.confirm('Leave this entry? Your draft is kept on this device.');
+    body.trim().length === 0 ||
+    // Audit A09: truthful copy — the draft lives in sessionStorage and dies
+    // with this tab. It never leaves the device.
+    window.confirm('Leave this entry? Your draft is kept on this device until you close this tab.');
 
   useEffect(() => {
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -212,6 +254,8 @@ function ComposerInner() {
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [body]);
+
+  const loading = loadState === 'loading';
 
   return (
     <div className="mx-auto w-full max-w-2xl space-y-6 px-4 py-8">
@@ -229,7 +273,25 @@ function ComposerInner() {
         <h1 className="text-2xl font-medium tracking-tight">{editId ? 'Edit entry' : 'New entry'}</h1>
       </header>
 
-      <div className="space-y-4">
+      {loadState === 'error' && (
+        <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3">
+          <p className="text-sm">Your entry couldn&apos;t be loaded just now. Nothing is lost — try again.</p>
+          <div className="mt-2">
+            <Button size="sm" variant="secondary" onClick={() => setHydrateNonce((n) => n + 1)}>
+              Try again
+            </Button>
+          </div>
+        </div>
+      )}
+      {loadState === 'missing' && (
+        <div className="rounded-xl border border-border bg-muted/40 px-4 py-3" role="status">
+          <p className="text-sm text-muted-foreground">
+            We couldn&apos;t find that entry — it may have been deleted. Saving will create a new entry with what you have here.
+          </p>
+        </div>
+      )}
+
+      <div className={loading ? 'pointer-events-none space-y-4 opacity-50' : 'space-y-4'} aria-busy={loading}>
         <div className="space-y-1.5">
           <Label htmlFor="title">Title (optional)</Label>
           <Input id="title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What is this about?" />
@@ -279,23 +341,24 @@ function ComposerInner() {
         )}
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={save} disabled={busy || body.trim().length === 0}>
+          <Button onClick={save} disabled={busy || loading || body.trim().length === 0}>
             {busy ? 'Saving…' : 'Save'}
           </Button>
           {entry && (
             <>
               {ASSIST_ACTIONS.map(({ type, label }) => (
-                <Button key={type} variant="secondary" size="sm" disabled={assistBusy !== null} onClick={() => runAssist(type)}>
+                <Button key={type} variant="secondary" size="sm" disabled={assistBusy !== null || busy} onClick={() => runAssist(type)}>
                   {assistBusy === type ? 'Thinking…' : label}
                 </Button>
               ))}
               <Button
                 variant="ghost"
                 size="sm"
+                disabled={assistBusy !== null || busy}
                 onClick={() => {
-                  if (confirmExit()) {
-                    router.push(`/reflect?tarot=1&prefill=${encodeURIComponent(body.slice(0, 200))}`);
-                  }
+                  // Audit A21: the tarot starter carries structured intent
+                  // into the chat composer — never the entry text.
+                  router.push('/reflect?intent=tarot');
                 }}
               >
                 Reflect with tarot
@@ -303,9 +366,9 @@ function ComposerInner() {
             </>
           )}
         </div>
-        {mode === 'guest' && draftSaved && (
+        {draftSaved && draftDirty && (
           <p className="text-xs text-muted-foreground" aria-live="polite">
-            Draft saved locally
+            Draft saved on this device (kept until you close this tab)
           </p>
         )}
 
@@ -318,7 +381,7 @@ function ComposerInner() {
                 if (window.confirm('Delete this journal entry? This cannot be undone.')) {
                   void removeEntry(entry.id)
                     .then(() => {
-                      if (mode === 'guest') clearJournalDraft();
+                      clearJournalDraft();
                       router.push('/journal');
                     })
                     .catch(() => toast.error('Could not delete the entry. Try again.'));

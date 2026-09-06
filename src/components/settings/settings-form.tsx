@@ -10,7 +10,8 @@ import { AppearanceSetting } from '@/components/settings/appearance-setting';
 import { useDataMode } from '@/hooks/use-data-mode';
 import { completeProfileSchema, thirteenYearCutoff, zodFieldErrors } from '@/lib/auth/validation';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
-import { clearGuestData, clearGuestHistory, loadGuestStore, saveGuestProfile } from '@/lib/guest/store';
+import { clearGuestData, clearGuestHistory, guestStoreHasData, loadGuestStore, saveGuestProfile } from '@/lib/guest/store';
+import { importGuestData } from '@/lib/guest/migration-client';
 import type { ReflectionGoal, TarotFamiliarity } from '@/lib/types';
 import { toast } from 'sonner';
 
@@ -38,6 +39,12 @@ export function SettingsForm() {
   const [familiarity, setFamiliarity] = useState<TarotFamiliarity | ''>('');
   const [memoryEnabled, setMemoryEnabled] = useState(true);
   const [saved, setSaved] = useState(false);
+  // Audit A14: account deletion gets a busy guard against double-clicks.
+  const [deleting, setDeleting] = useState(false);
+  // Audit A11: guest data present on a signed-in browser can always be
+  // imported explicitly from Settings, not just via the post-signup dialog.
+  const [guestDataAvailable, setGuestDataAvailable] = useState(false);
+  const [importing, setImporting] = useState(false);
   // Guest profile read once per store event — loadGuestStore() parses the
   // whole store on every call, so it must never run inside render.
   const [guestGoal, setGuestGoal] = useState<ReflectionGoal | undefined>(undefined);
@@ -48,6 +55,29 @@ export function SettingsForm() {
     window.addEventListener('eclipsay:guest-store-changed', read);
     return () => window.removeEventListener('eclipsay:guest-store-changed', read);
   }, [mode]);
+
+  useEffect(() => {
+    if (mode !== 'account') {
+      setGuestDataAvailable(false);
+      return;
+    }
+    const read = () => setGuestDataAvailable(guestStoreHasData());
+    read();
+    window.addEventListener('eclipsay:guest-store-changed', read);
+    return () => window.removeEventListener('eclipsay:guest-store-changed', read);
+  }, [mode]);
+
+  const importGuest = async () => {
+    setImporting(true);
+    const result = await importGuestData();
+    setImporting(false);
+    if (!result.ok) {
+      toast.error('We could not import right now. Your local reflections are untouched — try again.');
+      return;
+    }
+    setGuestDataAvailable(false);
+    toast.success(`Imported your local reflections (${result.imported} records).`);
+  };
 
   useEffect(() => {
     if (mode !== 'account' || !isSupabaseConfigured()) return;
@@ -103,28 +133,57 @@ export function SettingsForm() {
   };
 
   const exportData = async () => {
+    // Audit A08: an export must be COMPLETE or clearly failed. Every table
+    // is paginated past the API row limit, profiles/preferences are included,
+    // the payload is versioned, and any read error aborts with no download.
+    const fail = () => toast.error('The export failed — nothing was downloaded. Try again.');
     let payload: unknown;
     if (mode === 'account' && isSupabaseConfigured()) {
       const supabase = createClient();
-      const [sessions, messages, readings, journal, memories, followUps] = await Promise.all([
-        supabase.from('reflection_sessions').select('*'),
-        supabase.from('messages').select('*'),
-        supabase.from('tarot_readings').select('*'),
-        supabase.from('journal_entries').select('*'),
-        supabase.from('memories').select('*'),
-        supabase.from('follow_ups').select('*'),
+      const PAGE = 500;
+      const readAll = async (table: string): Promise<unknown[] | null> => {
+        const rows: unknown[] = [];
+        for (let from = 0; ; from += PAGE) {
+          const { data, error } = await supabase.from(table).select('*').range(from, from + PAGE - 1);
+          if (error) return null;
+          rows.push(...(data ?? []));
+          if (!data || data.length < PAGE) return rows;
+        }
+      };
+      const [profile, sessions, messages, readings, journal, memories, followUps] = await Promise.all([
+        supabase.from('profiles').select('*').maybeSingle(),
+        readAll('reflection_sessions'),
+        readAll('messages'),
+        readAll('tarot_readings'),
+        readAll('journal_entries'),
+        readAll('memories'),
+        readAll('follow_ups'),
       ]);
+      if (
+        !sessions ||
+        !messages ||
+        !readings ||
+        !journal ||
+        !memories ||
+        !followUps ||
+        profile.error
+      ) {
+        fail();
+        return;
+      }
       payload = {
+        schema: 'eclipsay-export.v1',
         exportedAt: new Date().toISOString(),
-        sessions: sessions.data ?? [],
-        messages: messages.data ?? [],
-        readings: readings.data ?? [],
-        journal: journal.data ?? [],
-        memories: memories.data ?? [],
-        followUps: followUps.data ?? [],
+        profile: profile.data ?? null,
+        sessions,
+        messages,
+        readings,
+        journal,
+        memories,
+        followUps,
       };
     } else {
-      payload = loadGuestStore();
+      payload = { schema: 'eclipsay-export.v1', exportedAt: new Date().toISOString(), guestStore: loadGuestStore() };
     }
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -138,11 +197,14 @@ export function SettingsForm() {
 
   const clearHistory = async () => {
     if (mode === 'account' && isSupabaseConfigured()) {
+      // Audit A14: the two old independent deletes could half-clear; the
+      // migration adds an atomic SECURITY DEFINER RPC scoped to auth.uid().
       const supabase = createClient();
-      const { error } = await supabase.from('reflection_sessions').select('id').limit(1);
-      if (error) return;
-      await supabase.from('follow_ups').delete().neq('id', crypto.randomUUID());
-      await supabase.from('reflection_sessions').delete().neq('id', crypto.randomUUID());
+      const { error } = await supabase.rpc('clear_my_history');
+      if (error) {
+        toast.error('History could not be cleared — nothing was deleted. Try again.');
+        return;
+      }
       toast.success('History cleared.');
       return;
     }
@@ -151,15 +213,23 @@ export function SettingsForm() {
   };
 
   const deleteAccount = async () => {
-    const res = await fetch('/api/account/delete', { method: 'POST' });
-    if (!res.ok) {
+    // Audit A14: one deletion at a time, network failures reported honestly.
+    setDeleting(true);
+    try {
+      const res = await fetch('/api/account/delete', { method: 'POST' });
+      if (!res.ok) {
+        toast.error('Account deletion failed. Try again or contact support.');
+        return;
+      }
+      if (isSupabaseConfigured()) {
+        await createClient().auth.signOut();
+      }
+      window.location.href = '/';
+    } catch {
       toast.error('Account deletion failed. Try again or contact support.');
-      return;
+    } finally {
+      setDeleting(false);
     }
-    if (isSupabaseConfigured()) {
-      await createClient().auth.signOut();
-    }
-    window.location.href = '/';
   };
 
   return (
@@ -355,6 +425,19 @@ export function SettingsForm() {
           </div>
         ) : (
           <>
+            {guestDataAvailable && (
+              <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 rounded-xl border border-primary/40 bg-primary/5 px-3.5 py-3">
+                <div className="min-w-0">
+                  <p className="text-sm">Import guest data</p>
+                  <p className="text-xs text-muted-foreground">
+                    This browser holds reflections that were saved without an account. Bring them into yours.
+                  </p>
+                </div>
+                <Button variant="secondary" size="sm" disabled={importing} onClick={() => void importGuest()}>
+                  {importing ? 'Importing…' : 'Import'}
+                </Button>
+              </div>
+            )}
             <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 rounded-xl border border-border px-3.5 py-3">
               <div className="min-w-0">
                 <p className="text-sm">Clear history</p>
@@ -389,8 +472,9 @@ export function SettingsForm() {
                     void deleteAccount();
                   }
                 }}
+                disabled={deleting}
               >
-                Delete
+                {deleting ? 'Deleting…' : 'Delete'}
               </Button>
             </div>
           </>

@@ -13,9 +13,11 @@ import type { ChatMessage } from '@/lib/chat/convert';
 const noop = () => {};
 
 const confirm = {
-  onSaveInsight: noop,
+  onSaveInsight: async () => true,
   onRememberThis: async () => true,
   onBringItIn: noop,
+  onScheduleFollowUp: async () => true,
+  onClarifyRequest: async () => true,
   markActed: noop,
   actedIds: new Set<string>(),
   approvedEntryIds: new Set<string>(),
@@ -31,11 +33,10 @@ const renderParts = (parts: ToolUIPart[], props: Partial<Parameters<typeof ToolP
   renderToStaticMarkup(
     createElement(ToolPartRenderer, {
       message: message(parts),
-      declined: false,
+      declinedToolCallIds: new Set<string>(),
       stale: false,
       onBeginReading: noop,
       onDecline: noop,
-      onClarifyRetry: noop,
       confirm,
       ...props,
     }),
@@ -90,7 +91,9 @@ describe('RecommendationCard', () => {
   });
 
   it('renders nothing when declined', () => {
-    const html = renderParts([toolPart('tool-recommend_reading', 't1', recommendationOutput)], { declined: true });
+    const html = renderParts([toolPart('tool-recommend_reading', 't1', recommendationOutput)], {
+      declinedToolCallIds: new Set(['t1']),
+    });
     expect(html).toBe('');
   });
 });
@@ -152,5 +155,51 @@ describe('ClarifyResultPart', () => {
     const html = renderParts([toolPart('tool-request_clarification', 't1', { error: 'draw_failed' })]);
     expect(html).toContain('We couldn&#x27;t draw the cards right now.');
     expect(html).not.toContain('>Retry</button>');
+  });
+
+  it('offers an explicit draw confirmation for a proposal (audit A34)', () => {
+    const html = renderParts([toolPart('tool-request_clarification', 't1', { readingId: 'reading-1', cardId: 'the_moon', requested: true })]);
+    expect(html).toContain('Draw clarification card');
+    expect(html).not.toContain('was drawn to clarify');
+  });
+
+  it('settles a proposal once its card was drawn', () => {
+    const html = renderParts([toolPart('tool-request_clarification', 't1', { readingId: 'reading-1', cardId: 'the_moon', requested: true })], {
+      confirm: { ...confirm, actedIds: new Set(['t1']) },
+    });
+    expect(html).toContain('Clarification card added');
+    expect(html).not.toContain('Draw clarification card');
+  });
+
+  it('keeps legacy drawn-card parts rendering as settled history', () => {
+    const html = renderParts([
+      toolPart('tool-request_clarification', 't1', {
+        readingId: 'reading-1',
+        cardId: 'the_moon',
+        clarifier: { name: 'The Star', orientation: 'upright' },
+      }),
+    ]);
+    expect(html).toContain('was drawn to clarify this card.');
+  });
+});
+
+describe('FollowUpConfirmCard', () => {
+  it('renders a confirmation path for the model follow-up proposal (audit A33)', () => {
+    const html = renderParts([toolPart('tool-create_followup', 't1', { followupId: 'f1', when: 'tomorrow', dueAt: new Date(Date.now() + 86_400_000).toISOString() })]);
+    expect(html).toContain('Check in later');
+    expect(html).toContain('Schedule it');
+  });
+
+  it('renders nothing for invalid dates', () => {
+    const html = renderParts([toolPart('tool-create_followup', 't1', { followupId: 'f1', when: 'custom', dueAt: 'not-a-date' })]);
+    expect(html).toBe('');
+  });
+
+  it('settles after scheduling', () => {
+    const html = renderParts([toolPart('tool-create_followup', 't1', { followupId: 'f1', when: 'tomorrow', dueAt: new Date(Date.now() + 86_400_000).toISOString() })], {
+      confirm: { ...confirm, actedIds: new Set(['t1']) },
+    });
+    expect(html).toContain('Scheduled');
+    expect(html).not.toContain('>Schedule it<');
   });
 });

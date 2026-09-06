@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useChat } from '@ai-sdk/react';
-import { DefaultChatTransport, isStaticToolUIPart } from 'ai';
+import { DefaultChatTransport } from 'ai';
 import { RefreshCw, PenLine, NotebookPen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AiChatInput } from '@/components/ui/ai-chat-input';
@@ -20,14 +20,16 @@ import { classifyTranscript } from '@/lib/ai/safety';
 import { track } from '@/lib/analytics';
 import { useDataMode } from '@/hooks/use-data-mode';
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client';
-import { appendMessage, getGuestSession, loadGuestStore, saveFollowUp, saveInsight as saveGuestInsight, saveMemory, saveReading, saveSession, updateMessageMeta } from '@/lib/guest/store';
+import { appendMessage, getGuestSession, loadGuestStore, saveFollowUp, saveInsight as saveGuestInsight, saveMemory, saveReading, saveSession, updateMessageMeta, GUEST_STORE_ERROR_EVENT } from '@/lib/guest/store';
 import { guestSaveToast } from '@/lib/account-nudge';
+import { isMessageCaptured, markMessageCaptured } from '@/lib/chat/captures';
 import { activeAskUserPart, activePlainClarification, extractToolParts, isSystemNotice, joinUiText, pickInterruptedReading, staleInteractiveMessageIds, storedToUi, type ChatMessage } from '@/lib/chat/convert';
 import { generateSessionTitle } from '@/lib/chat/session-actions';
 import { titleFrom } from '@/lib/chat/title';
+import { getSpread } from '@/lib/tarot/spreads';
 import { makeEntry } from '@/lib/journal/entries';
 import type { DrawnCard } from '@/lib/tarot/types';
-import type { MemoryCategory, StoredMessage, TarotReading } from '@/lib/types';
+import type { FollowUp, MemoryCategory, MessageMeta, StoredMessage, TarotReading } from '@/lib/types';
 
 const TAROT_UNAVAILABLE_MESSAGE = 'Cards are unavailable for this reflection. Start a new reflection to explore with cards.';
 const MEMORY_DISABLED_MESSAGE = 'Memory is off. Turn it back on to add memories.';
@@ -61,10 +63,10 @@ function relativeTime(iso: string): string {
   return `${weeks} week${weeks === 1 ? '' : 's'} ago`;
 }
 
-type ReadingsState = Record<string, { spreadId: string; cards: DrawnCard[]; createdAt: string }>;
+type ReadingsState = Record<string, { spreadId: string; cards: DrawnCard[]; seed: number; createdAt: string }>;
 
 export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) {
-  const { mode } = useDataMode();
+  const { mode, resolving } = useDataMode();
   const router = useRouter();
   const searchParams = useSearchParams();
   const [input, setInput] = useState('');
@@ -84,7 +86,16 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
         api: '/api/chat',
         // Resolvable body: evaluated per request, so guest memories are read
         // fresh at send time instead of frozen into the transport.
-        body: () => (mode === 'guest' ? { sessionId, guestMemory: guestMemoryPayload() } : { sessionId }),
+        // Audit A36: guests get the conservative teen prompt policy unless
+        // this browser completed the age step as adult.
+        body: () =>
+          mode === 'guest'
+            ? {
+                sessionId,
+                guestMemory: guestMemoryPayload(),
+                guestAdultConfirmed: loadGuestStore().profile.ageBracket === '18_plus',
+              }
+            : { sessionId },
       }),
     [sessionId, mode],
   );
@@ -101,6 +112,16 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   const [actedConfirms, setActedConfirms] = useState<Set<string>>(new Set());
   const [approvedContext, setApprovedContext] = useState<SearchHit[]>([]);
   const [savedMessageIds, setSavedMessageIds] = useState<Set<string>>(new Set());
+  const [savingMessageIds, setSavingMessageIds] = useState<Set<string>>(new Set());
+  // Audit A15: a provider stall must never lock the composer — a local
+  // timeout backs the Stop affordance.
+  const [timedOut, setTimedOut] = useState(false);
+  // Audit A16: a transcript that ends with an uninterpreted draw notice gets
+  // a persistent retry affordance that survives reload.
+  const [needsInterpretation, setNeedsInterpretation] = useState(false);
+  // Audit A13: hydration failures must be visible, never read as "empty".
+  const [loadError, setLoadError] = useState(false);
+  const [hydrateNonce, setHydrateNonce] = useState(0);
   // ?followup=<id> is consumed once per mount (useState initializer). The
   // banner already marked the follow-up 'revisited' on click; this card only
   // re-anchors the transcript and has no write side effects.
@@ -111,17 +132,33 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   // acted tool calls and declined recommendations restore from message meta.
   const restoreConfirmState = (messages: StoredMessage[]) => {
     const acted = new Set<string>();
-    const declined = new Set<string>();
+    const declinedToolCallIds = new Set<string>();
     const dismissed = new Set<string>();
     for (const m of messages) {
       for (const id of m.meta.actedToolCallIds ?? []) acted.add(id);
-      if (m.meta.declined) declined.add(m.id);
+      // Audit A31: acted/declined confirm state persists for accounts too.
+      for (const id of m.meta.declinedToolCallIds ?? []) declinedToolCallIds.add(id);
+      // Pre-A31 guests persisted a whole-message declined flag.
+      if (m.meta.declined) {
+        for (const tool of m.meta.tools ?? []) {
+          if (tool.type === 'tool-recommend_reading') declinedToolCallIds.add(tool.toolCallId);
+        }
+      }
       for (const id of m.meta.dismissedReadingIds ?? []) dismissed.add(id);
     }
     if (acted.size > 0) setActedConfirms(acted);
-    if (declined.size > 0) setDeclinedToolCalls(declined);
+    if (declinedToolCallIds.size > 0) setDeclinedToolCalls(declinedToolCallIds);
     if (dismissed.size > 0) setDismissedReadingIds(dismissed);
     return dismissed;
+  };
+
+  // Audit A16: a transcript whose LAST event is a draw/clarify notice was
+  // never interpreted (e.g. the reply failed and the user reloaded). The
+  // cards are persisted verbatim; regenerate() re-asks the model on the same
+  // transcript without redrawing or duplicating the user turn (audit A32).
+  const detectUninterpretedDraw = (messages: ChatMessage[]) => {
+    const last = messages[messages.length - 1];
+    setNeedsInterpretation(last?.role === 'user' && isSystemNotice(last.metadata));
   };
 
   // A reading persisted without a transcript anchor means navigation (or a
@@ -141,16 +178,21 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     transport,
     onError: () => {},
     onFinish: (event) => {
-      const tools = extractToolParts(event.message);
-      appendMessage(sessionId, {
-        id: event.message.id,
-        session_id: sessionId,
-        user_id: '',
-        role: 'assistant',
-        content: joinUiText(event.message),
-        meta: { ...(event.message.metadata ?? {}), ...(tools.length > 0 ? { tools } : {}) },
-        created_at: new Date().toISOString(),
-      });
+      // Audit A03: guest persistence is guest-only. Account transcripts are
+      // persisted server-side (PRD §34); writing here would leak the reply
+      // into the shared local store of the next visitor.
+      if (mode === 'guest') {
+        const tools = extractToolParts(event.message);
+        appendMessage(sessionId, {
+          id: event.message.id,
+          session_id: sessionId,
+          user_id: '',
+          role: 'assistant',
+          content: joinUiText(event.message),
+          meta: { ...(event.message.metadata ?? {}), ...(tools.length > 0 ? { tools } : {}) },
+          created_at: new Date().toISOString(),
+        });
+      }
       // One-shot title generation after the very first assistant reply.
       // Fire-and-forget: a failed or rejected title keeps the placeholder.
       const firstText = firstUserText.current;
@@ -175,15 +217,22 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
           supabase.from('messages').select('*').eq('session_id', sessionId).order('created_at'),
           supabase.from('tarot_readings').select('*').eq('session_id', sessionId).order('created_at'),
         ]);
+        // Audit A13: a failed read renders an explicit error with retry — it
+        // must never look like an empty session or fall back to guest data.
+        if (msgs.error || reads.error) {
+          setLoadError(true);
+          return;
+        }
         const dbMessages = (msgs.data ?? []) as unknown as StoredMessage[];
         if (dbMessages.length > 0) {
           initialMessageIds.current = new Set(dbMessages.map((m) => m.id));
           chat.setMessages(dbMessages.map(storedToUi));
           setLastActiveAt(dbMessages[dbMessages.length - 1].created_at);
+          detectUninterpretedDraw(dbMessages.map(storedToUi));
         }
         const dbReadings: ReadingsState = {};
         for (const r of (reads.data ?? []) as unknown as TarotReading[]) {
-          dbReadings[r.id] = { spreadId: r.spread_id, cards: r.cards, createdAt: r.created_at };
+          dbReadings[r.id] = { spreadId: r.spread_id, cards: r.cards, seed: r.seed, createdAt: r.created_at };
         }
         setReadings(dbReadings);
         resumeInterruptedDraw(dbMessages, dbReadings, restoreConfirmState(dbMessages));
@@ -194,10 +243,12 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
       if (session) {
         initialMessageIds.current = new Set(session.messages.map((m) => m.id));
         if (session.messages.length > 0) {
-          chat.setMessages(session.messages.map(storedToUi));
+          const uiMessages = session.messages.map(storedToUi);
+          chat.setMessages(uiMessages);
+          detectUninterpretedDraw(uiMessages);
         }
         const stored: ReadingsState = {};
-        for (const r of session.readings) stored[r.id] = { spreadId: r.spread_id, cards: r.cards, createdAt: r.created_at };
+        for (const r of session.readings) stored[r.id] = { spreadId: r.spread_id, cards: r.cards, seed: r.seed, createdAt: r.created_at };
         setReadings(stored);
         setLastActiveAt(session.updated_at);
         resumeInterruptedDraw(session.messages, stored, restoreConfirmState(session.messages));
@@ -205,25 +256,33 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     };
     void hydrate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, mode]);
+  }, [sessionId, mode, hydrateNonce]);
 
-  // Mount-only URL intents: 'prefill' carries text over from the journal
-  // composer; 'tarot' seeds the starter prompt for the entry action. Each is
-  // read exactly once per mount, and prefill never auto-sends.
+  // Mount-only URL intents (audit A21): `intent=tarot` seeds the tarot
+  // starter (optionally naming a spread from Explore), `prefill` carries
+  // journal text over. Tarot intent wins over prefill so "Reflect with
+  // tarot" never degrades into plain journal text. Nothing auto-sends.
   useEffect(() => {
+    const intent = searchParams.get('intent');
+    const spreadId = searchParams.get('spread');
     const prefill = searchParams.get('prefill');
-    if (prefill && input.length === 0) {
+    if (intent === 'tarot' && chat.messages.length === 0 && input.length === 0) {
+      const spread = spreadId ? getSpread(spreadId) : undefined;
+      setInput(
+        spread
+          ? `I'd like to explore something with a few cards — maybe the ${spread.title} spread.`
+          : "I'd like to explore something with a few cards.",
+      );
+    } else if (prefill && input.length === 0) {
       setInput(prefill.slice(0, 200));
-    } else if (searchParams.get('tarot') === '1' && chat.messages.length === 0) {
-      setInput("I'd like to explore something with a few cards.");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Fires once per recommend_reading tool call that reaches output-available
-  // (plan: tarot_suggested analytics, previously never emitted).
+  // Fires once per recommend_reading tool call (plan: tarot_suggested
+  // analytics). The pre-A34 model-driven clarification merge lived here; the
+  // tool no longer draws, so readings only change through the app actions.
   const suggestedTracked = useRef<Set<string>>(new Set());
-  // Sync tool-produced readings (model-initiated draws/clarifications) into local state.
   useEffect(() => {
     for (const message of chat.messages) {
       for (const part of message.parts) {
@@ -231,41 +290,9 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
           suggestedTracked.current.add(part.toolCallId);
           track('tarot_suggested');
         }
-        if (!isStaticToolUIPart(part) || part.state !== 'output-available') continue;
-        const output = part.output as
-          | {
-              error?: string;
-              readingId?: string;
-              spreadId?: string;
-              cards?: DrawnCard[];
-              clarifier?: DrawnCard;
-              cardId?: string;
-            }
-          | undefined;
-        if (!output || output.error) continue;
-
-        if (part.type === 'tool-request_clarification' && output.clarifier && output.readingId) {
-          const readingId = output.readingId;
-          const clarifier = output.clarifier;
-          setReadings((prev) => {
-            const reading = prev[readingId];
-            if (!reading || reading.cards.some((c) => c.cardId === clarifier.cardId)) return prev;
-            const cards = [...reading.cards, clarifier];
-            saveReading(sessionId, {
-              id: readingId,
-              session_id: sessionId,
-              user_id: '',
-              spread_id: reading.spreadId,
-              seed: 0,
-              cards,
-              created_at: new Date().toISOString(),
-            });
-            return { ...prev, [readingId]: { ...reading, cards } };
-          });
-        }
       }
     }
-  }, [chat.messages, readings, sessionId]);
+  }, [chat.messages]);
 
   // A stream that outlives its mount (the user navigated away mid-reply)
   // still persists through onFinish; merge whatever landed while we were
@@ -282,7 +309,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
         const next = { ...prev };
         for (const r of session.readings) {
           if (!next[r.id]) {
-            next[r.id] = { spreadId: r.spread_id, cards: r.cards, createdAt: r.created_at };
+            next[r.id] = { spreadId: r.spread_id, cards: r.cards, seed: r.seed, createdAt: r.created_at };
             changed = true;
           }
         }
@@ -312,7 +339,11 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, sessionId, chat.messages, chat.status]);
 
+  // Audit A03: guest sessions are created in guest mode only. Creating one
+  // in account mode is what let account readings/messages leak into the
+  // shared local store.
   const ensureGuestSession = (firstText: string) => {
+    if (mode !== 'guest' || resolving) return;
     if (!getGuestSession(sessionId)) {
       const now = new Date().toISOString();
       saveSession({
@@ -362,10 +393,14 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     } else {
       return; // busy — nothing to send right now
     }
-    if (mode === 'guest') {
+    // Audit A03: writes are gated on a RESOLVED guest mode. While auth is
+    // still resolving the visitor may be an account user — skip the local
+    // write; the account path persists server-side either way (PRD §34).
+    if (mode === 'guest' && !resolving) {
       ensureGuestSession(trimmed);
       // Same id as the optimistic message above (guest mode only — account
-      // sessions persist entirely server-side, PRD §34).
+      // sessions persist entirely server-side, PRD §34). The id also makes
+      // account persistence idempotent (audit A32).
       appendMessage(sessionId, {
         id: messageId,
         session_id: sessionId,
@@ -394,16 +429,23 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
 
   const commitDraw = (payload: { readingId: string; spreadId: string; seed: number; cards: DrawnCard[] }) => {
     const createdAt = new Date().toISOString();
-    setReadings((prev) => ({ ...prev, [payload.readingId]: { spreadId: payload.spreadId, cards: payload.cards, createdAt } }));
-    saveReading(sessionId, {
-      id: payload.readingId,
-      session_id: sessionId,
-      user_id: '',
-      spread_id: payload.spreadId,
-      seed: payload.seed,
-      cards: payload.cards,
-      created_at: createdAt,
-    });
+    setReadings((prev) => ({
+      ...prev,
+      [payload.readingId]: { spreadId: payload.spreadId, cards: payload.cards, seed: payload.seed, createdAt },
+    }));
+    // Audit A03: account readings persist server-side in the draw route;
+    // only guests mirror them into the local store.
+    if (mode === 'guest' && !resolving) {
+      saveReading(sessionId, {
+        id: payload.readingId,
+        session_id: sessionId,
+        user_id: '',
+        spread_id: payload.spreadId,
+        seed: payload.seed,
+        cards: payload.cards,
+        created_at: createdAt,
+      });
+    }
     track('tarot_started');
   };
 
@@ -455,16 +497,19 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     setDrawBar(null);
   };
 
-  const clarifyCard = async (readingId: string, cardId: string) => {
+  // Returns whether the clarification card was drawn (so the proposing
+  // confirm card can settle — audit A34). Guests keep their local reading in
+  // sync with the original seed and creation time intact (audit A05).
+  const clarifyCard = async (readingId: string, cardId: string): Promise<boolean> => {
     if (tarotUnavailable) {
       toast.error(TAROT_UNAVAILABLE_MESSAGE);
-      return;
+      return false;
     }
     const reading = readings[readingId];
     // A clarification is only meaningful when its interpret message can be
     // sent (send no-ops while a generation is in flight) — otherwise the
     // drawn card would appear with no reading attached.
-    if (!reading || clarifyingCardId || chat.status !== 'ready') return;
+    if (!reading || clarifyingCardId || chat.status !== 'ready') return false;
     setClarifyingCardId(cardId);
     try {
       const res = await fetch('/api/tarot/clarify', {
@@ -472,25 +517,30 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ readingId, cardId, alreadyDrawn: reading.cards.map((c) => c.cardId), sessionId }),
       });
-      if (!res.ok) return;
+      if (!res.ok) return false;
       const { clarifier } = (await res.json()) as { clarifier: DrawnCard };
       const cards = [...reading.cards, clarifier];
       setReadings((prev) => ({ ...prev, [readingId]: { ...prev[readingId], cards } }));
-      saveReading(sessionId, {
-        id: readingId,
-        session_id: sessionId,
-        user_id: '',
-        spread_id: reading.spreadId,
-        seed: 0,
-        cards,
-        created_at: new Date().toISOString(),
-      });
+      if (mode === 'guest' && !resolving) {
+        // Audit A05: clarification EXPANDS a reading — the seeded identity
+        // (seed + created_at) must survive, or history/exports break.
+        saveReading(sessionId, {
+          id: readingId,
+          session_id: sessionId,
+          user_id: '',
+          spread_id: reading.spreadId,
+          seed: reading.seed,
+          cards,
+          created_at: reading.createdAt,
+        });
+      }
       const target = reading.cards.find((c) => c.cardId === cardId);
       // Language-neutral event notice (see completeDraw): data only.
       send(
         `[Clarification · ${clarifier.cardId} → ${cardId}] ${clarifier.name} (${clarifier.orientation}) clarifies ${target?.name ?? cardId}`,
         { systemNotice: 'clarify', clarify: { readingId, targetCardId: cardId, clarifierCardId: clarifier.cardId } },
       );
+      return true;
     } finally {
       setClarifyingCardId(null);
     }
@@ -498,18 +548,47 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
 
   // ── Propose-then-confirm actions (PRD §39, §41, §62) ─────────────────
 
+  // Audit A31: account confirm/decline decisions persist onto the assistant
+  // message row (located by its serialized tool part, since the client never
+  // knows the DB row id), so proposals stay settled across reloads exactly
+  // like the guest path (PRD §62).
+  const persistAccountConfirmState = async (toolCallId: string, kind: 'acted' | 'declined') => {
+    if (mode !== 'account' || !isSupabaseConfigured()) return;
+    try {
+      const supabase = createClient();
+      const { data } = await supabase
+        .from('messages')
+        .select('id, meta')
+        .eq('session_id', sessionId)
+        .contains('meta', { tools: [{ toolCallId }] })
+        .maybeSingle();
+      if (!data) return;
+      const meta = (data.meta ?? {}) as MessageMeta;
+      const patch: MessageMeta =
+        kind === 'acted'
+          ? { actedToolCallIds: [...new Set([...(meta.actedToolCallIds ?? []), toolCallId])] }
+          : { declinedToolCallIds: [...new Set([...(meta.declinedToolCallIds ?? []), toolCallId])] };
+      await supabase.from('messages').update({ meta: { ...meta, ...patch } }).eq('id', data.id);
+    } catch {
+      // Worst case the card becomes actionable again after reload — never
+      // block the user interaction on the persistence write.
+    }
+  };
+
   const handleActed = (messageId: string, toolCallId: string) => {
     const next = new Set(actedConfirms).add(toolCallId);
     setActedConfirms(next);
     // Guests persist the resolved state so cards stay settled after
-    // navigating away and back (PRD §62).
+    // navigating away and back (PRD §62); accounts now do the same (A31).
     if (mode === 'guest') updateMessageMeta(sessionId, messageId, { actedToolCallIds: [...next] });
+    else void persistAccountConfirmState(toolCallId, 'acted');
   };
 
-  const handleDeclined = (messageId: string) => {
-    const next = new Set(declinedToolCalls).add(messageId);
+  const handleDeclined = (messageId: string, toolCallId: string) => {
+    const next = new Set(declinedToolCalls).add(toolCallId);
     setDeclinedToolCalls(next);
-    if (mode === 'guest') updateMessageMeta(sessionId, messageId, { declined: true });
+    if (mode === 'guest') updateMessageMeta(sessionId, messageId, { declinedToolCallIds: [...next] });
+    else void persistAccountConfirmState(toolCallId, 'declined');
   };
 
   const saveInsightText = async (text: string): Promise<boolean> => {
@@ -524,30 +603,45 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
         toast.error('Could not save the insight. It stays on screen — try again.');
         return false;
       }
+      track('insight_saved');
+      toast.success('Insight saved to your journal.');
     } else {
       saveGuestInsight(makeEntry({ body: text, entry_type: 'insight', source_session_id: sessionId, created_at: now, updated_at: now }));
-      // Guest: save locally first, then offer the account as the value moment
-      // (§14) — a non-blocking toast action, shown once (plan: Accounts §5).
+      // Audit A23: exactly one success notification per save — guestSaveToast
+      // already IS the success toast (with the one-time account nudge).
+      track('insight_saved');
       guestSaveToast('Insight saved to your journal.', router.push);
     }
-    track('insight_saved');
-    toast.success('Insight saved to your journal.');
     return true;
   };
 
   // Manual capture affordance (PRD §4.2 — user agency): every assistant
   // message can be saved through the exact write path the propose_insight
-  // confirm uses; success just flips the local affordance to its saved state.
+  // confirm uses. Audit A23: a persisted capture key makes the affordance
+  // idempotent across reloads, and a pending lock blocks double-submits.
   const saveMessageInsight = (messageId: string, text: string) => {
+    if (savingMessageIds.has(messageId) || isMessageCaptured(sessionId, messageId)) {
+      setSavedMessageIds((prev) => new Set(prev).add(messageId));
+      return;
+    }
+    setSavingMessageIds((prev) => new Set(prev).add(messageId));
     void saveInsightText(text).then((saved) => {
-      if (saved) setSavedMessageIds((prev) => new Set(prev).add(messageId));
+      if (saved) {
+        markMessageCaptured(sessionId, messageId);
+        setSavedMessageIds((prev) => new Set(prev).add(messageId));
+      }
+      setSavingMessageIds((prev) => {
+        const next = new Set(prev);
+        next.delete(messageId);
+        return next;
+      });
     });
   };
 
   const sessionSafety = useMemo(() => {
-    const userMessages = chat.messages.filter(
-      (message) => message.role === 'user' && !isSystemNotice(message.metadata),
-    );
+    // Audit A27: every user message is classified — metadata is
+    // client-controlled and must never gate the safety policy.
+    const userMessages = chat.messages.filter((message) => message.role === 'user');
     const transcriptSafety = classifyTranscript(userMessages.map(joinUiText));
     const persistedCrisis = chat.messages.some((message) => message.role === 'assistant' && message.metadata?.crisis === true);
     return {
@@ -562,11 +656,14 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     if (tarotUnavailable && drawBar) setDrawBar(null);
   }, [drawBar, tarotUnavailable]);
 
-  const scheduleFollowUp = async (when: 'tomorrow' | '3days' | '1week') => {
+  // One write path for both the manual Check-in dialog and the model's
+  // create_followup proposal (audit A33). Returns success so the proposal
+  // card settles only when the reminder actually exists.
+  const scheduleFollowUpAt = async (dueAt: Date): Promise<boolean> => {
     const day = 24 * 60 * 60 * 1000;
-    const dueAt =
-      when === 'tomorrow' ? new Date(Date.now() + day) : when === '3days' ? new Date(Date.now() + 3 * day) : new Date(Date.now() + 7 * day);
-    const followUp: import('@/lib/types').FollowUp = {
+    const now = Date.now();
+    if (dueAt.getTime() <= now || dueAt.getTime() > now + 366 * day) return false;
+    const followUp: FollowUp = {
       id: crypto.randomUUID(),
       user_id: '',
       session_id: sessionId,
@@ -576,20 +673,34 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
       created_at: new Date().toISOString(),
     };
     if (mode === 'account' && isSupabaseConfigured()) {
-      const res = await fetch('/api/followups', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, dueAt: followUp.due_at }),
-      });
-      if (!res.ok) {
+      try {
+        const res = await fetch('/api/followups', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId, dueAt: followUp.due_at }),
+        });
+        if (!res.ok) {
+          toast.error('Could not schedule the check-in.');
+          return false;
+        }
+      } catch {
         toast.error('Could not schedule the check-in.');
-        return;
+        return false;
       }
     } else {
+      if (mode !== 'guest' || resolving) return false;
       saveFollowUp(followUp);
     }
     track('followup_created');
     toast.success('Check-in scheduled. Eclipsay will remind you here in the app.');
+    return true;
+  };
+
+  const scheduleFollowUp = (when: 'tomorrow' | '3days' | '1week') => {
+    const day = 24 * 60 * 60 * 1000;
+    const dueAt =
+      when === 'tomorrow' ? new Date(Date.now() + day) : when === '3days' ? new Date(Date.now() + 3 * day) : new Date(Date.now() + 7 * day);
+    return scheduleFollowUpAt(dueAt);
   };
 
   const rememberThis = async (content: string, category: string): Promise<boolean> => {
@@ -661,7 +772,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
   );
   const busy = chat.status === 'submitted' || chat.status === 'streaming';
   const failed = chat.status === 'error';
-  const empty = chat.messages.length === 0;
+  const empty = chat.messages.length === 0 && !loadError;
   const onboardingEligible = useMemo(() => {
     if (busy || sessionSafety.highStakes) return false;
     const latestAssistant = [...chat.messages].reverse().find((message) => message.role === 'assistant');
@@ -669,9 +780,35 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
     return latestAssistant.parts.every((part) => !part.type.startsWith('tool-'));
   }, [busy, chat.messages, sessionSafety.highStakes]);
 
+  // Audit A15: back a stalled generation with a local timeout slightly above
+  // the route's maxDuration; stopping preserves the user turn and any
+  // partial content, and the recovery UI offers Try again / Continue.
+  useEffect(() => {
+    if (!busy) return;
+    setTimedOut(false);
+    const timer = window.setTimeout(() => {
+      chat.stop();
+      setTimedOut(true);
+    }, 65_000);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy]);
+
+  useEffect(() => {
+    // Audit A19: storage denial/quota must surface honestly — input is kept,
+    // the user just learns their data won't persist.
+    const onStoreError = (event: Event) => {
+      const reason = (event as CustomEvent<{ reason?: string }>).detail?.reason;
+      if (reason === 'quota') toast.error('This browser\u2019s storage is full — your reflections may not be saved. Free up space or export your data.');
+      else toast.error('This browser is blocking local storage — your reflections won\u2019t be saved here.');
+    };
+    window.addEventListener(GUEST_STORE_ERROR_EVENT, onStoreError);
+    return () => window.removeEventListener(GUEST_STORE_ERROR_EVENT, onStoreError);
+  }, []);
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {mode === 'guest' && <OnboardingDialogs eligible={onboardingEligible} />}
+      {mode === 'guest' && !resolving && <OnboardingDialogs eligible={onboardingEligible} />}
       <Dialog open={checkInOpen} onOpenChange={setCheckInOpen}>
         <DialogContent className="max-w-sm rounded-2xl border border-border bg-card p-5 shadow-xl ring-0">
           <DialogHeader>
@@ -726,7 +863,17 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
               </div>
             </div>
           )}
-          {empty ? (
+          {loadError ? (
+            <div role="alert" className="my-24 flex flex-col items-center gap-3 text-center">
+              <p className="text-sm text-muted-foreground">
+                Your reflections couldn&apos;t be loaded just now. Nothing is lost — try again.
+              </p>
+              <Button size="sm" variant="secondary" onClick={() => { setLoadError(false); setHydrateNonce((n) => n + 1); }}>
+                <RefreshCw className="size-3.5" aria-hidden />
+                Try again
+              </Button>
+            </div>
+          ) : empty ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 py-24 text-center">
               <h1 className="text-2xl font-medium tracking-tight">What&apos;s on your mind?</h1>
               <p className="max-w-sm text-sm text-muted-foreground">
@@ -797,20 +944,21 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
                     <Markdown>{messageText}</Markdown>
                     <ToolPartRenderer
                       message={message}
-                      declined={declinedToolCalls.has(message.id)}
+                      declinedToolCallIds={declinedToolCalls}
                       stale={staleInteractiveIds.has(message.id)}
                       tarotUnavailable={tarotUnavailable}
                       dockedToolCallId={activeClarification?.messageId === message.id ? activeClarification.part.toolCallId : undefined}
                       onBeginReading={(spreadId) => void beginReading(spreadId)}
-                      onClarifyRetry={(readingId, cardId) => void clarifyCard(readingId, cardId)}
-                      onDecline={() => handleDeclined(message.id)}
+                      onDecline={(messageId, toolCallId) => handleDeclined(messageId, toolCallId)}
                       confirm={{
                         actedIds: actedConfirms,
                         markActed: (toolCallId) => handleActed(message.id, toolCallId),
                         approvedEntryIds: new Set(approvedContext.map((c) => c.entryId)),
-                        onSaveInsight: (text) => void saveInsightText(text),
+                        onSaveInsight: (text) => saveInsightText(text),
                         onRememberThis: (content, category) => rememberThis(content, category),
                         onBringItIn: bringItIn,
+                        onScheduleFollowUp: (dueAt) => scheduleFollowUpAt(new Date(dueAt)),
+                        onClarifyRequest: (readingId, cardId) => clarifyCard(readingId, cardId),
                       }}
                     />
                     {messageText.trim().length > 0 && (
@@ -819,13 +967,13 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
                           type="button"
                           size="xs"
                           variant="ghost"
-                          disabled={savedMessageIds.has(message.id)}
+                          disabled={savedMessageIds.has(message.id) || savingMessageIds.has(message.id)}
                           aria-label="Save this reflection to your journal"
                           className="text-muted-foreground motion-reduce:transition-none"
                           onClick={() => saveMessageInsight(message.id, messageText)}
                         >
                           <NotebookPen aria-hidden />
-                          {savedMessageIds.has(message.id) ? 'Saved' : 'Save to journal'}
+                          {savedMessageIds.has(message.id) ? 'Saved' : savingMessageIds.has(message.id) ? 'Saving…' : 'Save to journal'}
                         </Button>
                       </div>
                     )}
@@ -837,6 +985,11 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
                 <div className="flex items-center gap-2 text-sm text-muted-foreground" aria-live="polite">
                   <span className="size-2 animate-pulse rounded-full bg-primary/60" />
                   Reflecting…
+                  {/* Audit A15: an explicit Stop — a stalled generation must
+                      never lock the composer until navigation. */}
+                  <Button size="xs" variant="ghost" onClick={() => chat.stop()}>
+                    Stop
+                  </Button>
                 </div>
               )}
               {drawFailedSpread && (
@@ -848,14 +1001,38 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
                   }}
                 />
               )}
-              {failed && (
+              {needsInterpretation && !busy && !failed && !timedOut && (
+                <div className="rounded-xl border border-border bg-card px-4 py-3">
+                  {/* Audit A16: reload after a failed interpretation keeps a
+                      clear retry path — without redrawing the cards. */}
+                  <p className="text-sm">Your cards are on the table, waiting to be read.</p>
+                  <div className="mt-2">
+                    <Button size="sm" variant="secondary" onClick={() => { setNeedsInterpretation(false); chat.regenerate(); }}>
+                      <RefreshCw className="size-3.5" aria-hidden />
+                      Interpret now
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {drawFailedSpread && (
+                <DrawFailedCard
+                  onRetry={() => {
+                    const spreadId = drawFailedSpread;
+                    setDrawFailedSpread(null);
+                    void beginReading(spreadId);
+                  }}
+                />
+              )}
+              {(failed || timedOut) && (
                 <div
                   role="alert"
                   className="flex flex-col gap-3 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3"
                 >
-                  <p className="text-sm">Something went wrong while generating this reflection.</p>
+                  <p className="text-sm">
+                    {timedOut ? 'This reflection took too long and was stopped.' : 'Something went wrong while generating this reflection.'}
+                  </p>
                   <div className="flex gap-2">
-                    <Button size="sm" variant="secondary" onClick={() => chat.regenerate()}>
+                    <Button size="sm" variant="secondary" onClick={() => { setTimedOut(false); chat.regenerate(); }}>
                       <RefreshCw className="size-3.5" aria-hidden />
                       Try again
                     </Button>
@@ -865,6 +1042,7 @@ export function ChatScreen({ initialSessionId }: { initialSessionId?: string }) 
                       onClick={() => {
                         setInput(lastSent.current);
                         chat.clearError();
+                        setTimedOut(false);
                       }}
                     >
                       <PenLine className="size-3.5" aria-hidden />

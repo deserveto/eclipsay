@@ -2,7 +2,6 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import type { User } from '@supabase/supabase-js';
 import { SPREADS, getSpread } from '@/lib/tarot/spreads';
-import { clarifyReading } from '@/lib/tarot/draw-service';
 import { createClient } from '@/lib/supabase/server';
 
 // Tarot tools (plan: AI layer — Tools; PRD §62). The model may ask structured
@@ -98,19 +97,16 @@ export function createTarotTools({ user }: { user: User | null }) {
 
     request_clarification: tool({
       description:
-        'Draw one clarification card from the remaining deck of an existing reading, to clarify a specific card.',
+        'Suggest drawing one clarification card for a specific card of an existing reading (use after interpreting a reading, when one card would benefit from a clarifying card). The APP asks the user to confirm; nothing is drawn until they accept.',
       inputSchema: z.object({
         readingId: z.string().describe('The reading that contains the card to clarify'),
         cardId: z.string().describe('The card id being clarified, e.g. the_moon'),
       }),
-      execute: async ({ readingId, cardId }) => {
-        try {
-          const clarifier = await clarifyReading({ user, readingId, cardId, alreadyDrawn: [] });
-          return { readingId, cardId, clarifier };
-        } catch {
-          return { error: 'draw_failed' as const, readingId, cardId };
-        }
-      },
+      // Propose-then-confirm (PRD §62, audit A34): the model never triggers a
+      // draw. The UI renders a confirm card; on accept the app draws through
+      // /api/tarot/clarify with the reading's real exclusion set, so a
+      // clarification can never duplicate a card already in the deck.
+      execute: async ({ readingId, cardId }) => ({ readingId, cardId, requested: true as const }),
     }),
 
     propose_insight: tool({

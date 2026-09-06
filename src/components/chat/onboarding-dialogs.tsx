@@ -24,9 +24,13 @@ const FAMILIARITY: { value: TarotFamiliarity; label: string }[] = [
 ];
 
 export function OnboardingDialogs({ eligible }: { eligible: boolean }) {
-  const [step, setStep] = useState<'idle' | 'goal' | 'familiarity'>('idle');
+  // Audit A36: the age step runs first and CANNOT be silently skipped — the
+  // 13+ product floor needs an answer before the personalized steps. The
+  // answer is a coarse bracket only (never a birth date); it drives the
+  // conservative 13–17 prompt policy server-side via guestAdultConfirmed.
+  const [step, setStep] = useState<'idle' | 'age' | 'goal' | 'familiarity'>('idle');
   useEffect(() => {
-    if (eligible && !loadGuestStore().onboardingDone) setStep('goal');
+    if (eligible && !loadGuestStore().onboardingDone) setStep('age');
   }, [eligible]);
   const finish = () => {
     saveGuestProfile({ onboardingDone: true });
@@ -35,6 +39,51 @@ export function OnboardingDialogs({ eligible }: { eligible: boolean }) {
 
   return (
     <>
+      <Dialog
+        open={step === 'age'}
+        onOpenChange={(o) => {
+          if (!o) finish();
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>First, a quick check</DialogTitle>
+            <DialogDescription>
+              Eclipsay is built for ages 13 and up. Your answer stays on this device — it only tunes how
+              carefully Eclipsay responds.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2">
+            <Button
+              variant="secondary"
+              className="justify-start"
+              onClick={() => {
+                saveGuestProfile({ ageBracket: '18_plus' });
+                setStep('goal');
+              }}
+            >
+              I&apos;m 18 or older
+            </Button>
+            <Button
+              variant="secondary"
+              className="justify-start"
+              onClick={() => {
+                saveGuestProfile({ ageBracket: '13_17' });
+                setStep('goal');
+              }}
+            >
+              I&apos;m 13–17
+            </Button>
+            <Button variant="ghost" onClick={finish}>
+              Prefer not to say
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              Under 13? Eclipsay isn&apos;t available yet — please close this tab.
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog
         open={step === 'goal'}
         onOpenChange={(o) => {
@@ -66,7 +115,6 @@ export function OnboardingDialogs({ eligible }: { eligible: boolean }) {
           </div>
         </DialogContent>
       </Dialog>
-
       <Dialog
         open={step === 'familiarity'}
         onOpenChange={(o) => {

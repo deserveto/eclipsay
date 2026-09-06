@@ -18,12 +18,30 @@ import { JOURNAL_DRAFT_KEY } from '../journal/drafts';
 
 export const GUEST_STORE_KEY = 'eclipsay.guest.v1';
 
+/** Why a guest-store write/read failed (audit A19) — surfaced on the window. */
+export type GuestStoreErrorReason = 'unavailable' | 'quota' | 'corrupt';
+
+export const GUEST_STORE_ERROR_EVENT = 'eclipsay:guest-store-error';
+
+function reportStoreError(reason: GuestStoreErrorReason): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.dispatchEvent(new CustomEvent(GUEST_STORE_ERROR_EVENT, { detail: { reason } }));
+  } catch {
+    // Events are best-effort; never throw from the data layer.
+  }
+}
+
 export type GuestProfile = {
   reflectionGoal?: ReflectionGoal;
   tarotFamiliarity?: TarotFamiliarity;
   // Master switch for memory use in prompts (PRD §41). Always present in memory:
   // readStore defaults it to true for records written before this field existed.
   memoryEnabled: boolean;
+  // Audit A36: the guest eligibility step (13+ product floor; 13–17 gets the
+  // conservative teen policy server-side). Absent = unspecified, which the
+  // chat route treats conservatively.
+  ageBracket?: '13_17' | '18_plus';
 };
 
 export type GuestSession = ReflectionSession & {
@@ -57,47 +75,88 @@ export function emptyGuestStore(): GuestStore {
 
 function defaultStorage(): Storage | null {
   if (typeof window === 'undefined') return null;
-  return window.localStorage;
+  // Audit A19: storage can be denied (SecurityError) or missing; the store
+  // degrades to in-memory instead of throwing out of chat actions.
+  try {
+    return window.localStorage;
+  } catch {
+    reportStoreError('unavailable');
+    return null;
+  }
+}
+
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function readStore(storage: Storage | null): GuestStore {
   if (!storage) return emptyGuestStore();
-  const raw = storage.getItem(GUEST_STORE_KEY);
+  let raw: string | null = null;
+  try {
+    raw = storage.getItem(GUEST_STORE_KEY);
+  } catch {
+    reportStoreError('unavailable');
+    return emptyGuestStore();
+  }
   if (!raw) return emptyGuestStore();
   try {
     const parsed = JSON.parse(raw) as GuestStore;
-    if (parsed.version !== 1) return emptyGuestStore();
+    if (!isRecordLike(parsed) || parsed.version !== 1) {
+      reportStoreError('corrupt');
+      return emptyGuestStore();
+    }
     // Normalize the profile so records written before memoryEnabled upgrade
     // silently to the default (on) instead of blocking memory use (PRD §41).
+    const profileSource: Record<string, unknown> = isRecordLike(parsed.profile) ? parsed.profile : {};
     const profile: GuestProfile = {
-      reflectionGoal: parsed.profile?.reflectionGoal,
-      tarotFamiliarity: parsed.profile?.tarotFamiliarity,
-      memoryEnabled: parsed.profile?.memoryEnabled ?? true,
+      reflectionGoal: profileSource.reflectionGoal as GuestProfile['reflectionGoal'],
+      tarotFamiliarity: profileSource.tarotFamiliarity as GuestProfile['tarotFamiliarity'],
+      memoryEnabled: profileSource.memoryEnabled !== false,
+      ageBracket: profileSource.ageBracket as GuestProfile['ageBracket'],
     };
+    // Audit A19: corrupt records are dropped row-wise, never crash readers —
+    // and valid siblings stay usable.
+    const sessions = Array.isArray(parsed.sessions) ? parsed.sessions.filter(isRecordLike) : [];
+    const journal = Array.isArray(parsed.journal) ? parsed.journal.filter(isRecordLike) : [];
+    const insights = Array.isArray(parsed.insights) ? parsed.insights.filter(isRecordLike) : [];
+    const memories = Array.isArray(parsed.memories) ? parsed.memories.filter(isRecordLike) : [];
+    const followUps = Array.isArray(parsed.followUps) ? parsed.followUps.filter(isRecordLike) : [];
     return {
       ...emptyGuestStore(),
       ...parsed,
       profile,
-      sessions: parsed.sessions ?? [],
-      journal: parsed.journal ?? [],
-      insights: parsed.insights ?? [],
-      memories: parsed.memories ?? [],
+      sessions: sessions as GuestStore['sessions'],
+      journal: journal as GuestStore['journal'],
+      insights: insights as GuestStore['insights'],
+      memories: memories as GuestStore['memories'],
+      followUps: followUps as GuestStore['followUps'],
     };
   } catch {
+    reportStoreError('corrupt');
     return emptyGuestStore();
   }
 }
 
-function writeStore(store: GuestStore, storage: Storage | null): void {
-  storage?.setItem(GUEST_STORE_KEY, JSON.stringify(store));
+function writeStore(store: GuestStore, storage: Storage | null): boolean {
+  if (!storage) return false;
+  try {
+    storage.setItem(GUEST_STORE_KEY, JSON.stringify(store));
+    return true;
+  } catch {
+    // Audit A19: quota/full storage must not throw out of chat or onboarding
+    // actions; the UI listens for the error event to explain the state.
+    reportStoreError('quota');
+    return false;
+  }
 }
-
 function mutate(fn: (store: GuestStore) => void, storage?: Storage): void {
   const target = storage ?? defaultStorage();
   const store = readStore(target);
   fn(store);
   writeStore(store, target);
-  window.dispatchEvent(new CustomEvent('eclipsay:guest-store-changed'));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('eclipsay:guest-store-changed'));
+  }
 }
 
 export function loadGuestStore(storage?: Storage): GuestStore {
@@ -110,6 +169,16 @@ export function saveGuestProfile(patch: Partial<GuestProfile> & { onboardingDone
     const { onboardingDone, ...profilePatch } = patch;
     store.profile = { ...store.profile, ...profilePatch };
     if (onboardingDone !== undefined) store.onboardingDone = onboardingDone;
+  }, storage);
+}
+
+/** Updates an entry wherever it lives (journal + insights copies stay in sync). */
+export function updateGuestEntry(entry: JournalEntry, storage?: Storage): void {
+  mutate((store) => {
+    const j = store.journal.findIndex((e) => e.id === entry.id);
+    if (j >= 0) store.journal[j] = entry;
+    const i = store.insights.findIndex((e) => e.id === entry.id);
+    if (i >= 0) store.insights[i] = entry;
   }, storage);
 }
 
@@ -191,6 +260,9 @@ export function deleteJournalEntry(id: string, storage?: Storage): void {
   mutate((store) => {
     store.journal = store.journal.filter((e) => e.id !== id);
     store.insights = store.insights.filter((e) => e.id !== id);
+    // Audit A12: reminders linked to a deleted entry are deleted with it,
+    // mirroring the account-side ON DELETE CASCADE (0001_init.sql).
+    store.followUps = store.followUps.filter((f) => f.journal_entry_id !== id);
   }, storage);
 }
 
@@ -205,6 +277,8 @@ export function renameGuestSession(id: string, title: string, storage?: Storage)
 export function deleteGuestSession(id: string, storage?: Storage): void {
   mutate((store) => {
     store.sessions = store.sessions.filter((s) => s.id !== id);
+    // Audit A12: no stale reminder for a deleted reflection.
+    store.followUps = store.followUps.filter((f) => f.session_id !== id);
   }, storage);
 }
 

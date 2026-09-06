@@ -171,7 +171,7 @@ export function VerifyEmailPanel({ next }: { next: string }) {
         <button
           type="button"
           onClick={() => router.push(safeNextPath(next))}
-          className="text-primary underline-offset-4 hover:underline"
+          className="text-primary underline underline-offset-4 hover:opacity-80"
         >
           Continue
         </button>

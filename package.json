@@ -15,6 +15,9 @@
     "fetch:cards": "tsx scripts/fetch-card-images.ts"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.49",
+    "@ai-sdk/google": "^4.0.64",
+    "@ai-sdk/openai": "^4.0.59",
     "@ai-sdk/openai-compatible": "^3.0.40",
     "@ai-sdk/react": "^4.0.87",
     "@supabase/ssr": "^0.12.5",
@@ -30,7 +33,6 @@
     "react-dom": "^19.2.8",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "shadcn": "^4.19.0",
     "sonner": "^2.0.8",
     "tailwind-merge": "^3.6.0",
     "tw-animate-css": "^1.4.0",
@@ -45,10 +47,14 @@
     "@vitejs/plugin-react": "^6.1.1",
     "eslint": "^9",
     "eslint-config-next": "15.5.24",
+    "shadcn": "^4.19.0",
     "sharp": "^0.35.4",
     "tailwindcss": "^4",
     "tsx": "^4.23.12",
     "typescript": "^5",
     "vitest": "^4.1.11"
+  },
+  "overrides": {
+    "qs": "^6.16.0"
   }
 }

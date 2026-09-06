@@ -25,6 +25,16 @@ export async function POST(request: Request) {
   if (!parsed.success) return Response.json({ error: 'invalid_body' }, { status: 400 });
 
   const supabase = await createClient();
+  // Audit A17: insights may only link to a session the caller owns.
+  if (parsed.data.sessionId) {
+    const { data: session } = await supabase
+      .from('reflection_sessions')
+      .select('id')
+      .eq('id', parsed.data.sessionId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+    if (!session) return Response.json({ error: 'forbidden' }, { status: 403 });
+  }
   const now = new Date().toISOString();
   const { data, error } = await supabase
     .from('journal_entries')

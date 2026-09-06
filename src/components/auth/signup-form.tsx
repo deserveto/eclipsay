@@ -220,7 +220,7 @@ export function SignupForm({ next }: { next: string }) {
 
       <p className="text-sm text-muted-foreground">
         Already have an account?{' '}
-        <Link href={`/login?next=${encodeURIComponent(safeNextPath(next))}`} className="text-primary underline-offset-4 hover:underline">
+        <Link href={`/login?next=${encodeURIComponent(safeNextPath(next))}`} className="text-primary underline underline-offset-4 hover:opacity-80">
           Log in
         </Link>
       </p>

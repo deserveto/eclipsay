@@ -9,6 +9,12 @@ const crisisCases = [
   'there is no reason to go on',
   'I keep cutting myself when it gets bad',
   'I took an overdose last night',
+  // Audit A28: executed-classifier gaps — Indonesian + direct death questions.
+  'saya ingin bunuh diri',
+  'aku tidak ingin lagi hidup',
+  'apakah saya akan mati besok',
+  'Will I die tomorrow?',
+  'am I going to die?',
 ];
 
 const highStakesCases = [
@@ -19,6 +25,10 @@ const highStakesCases = [
   'I want revenge on my boss',
   'I just got my medical diagnosis results',
   'I relapsed after two years clean',
+  // Audit A28: medication + savings decisions previously passed unclassified.
+  'Should I stop taking my medication?',
+  'Should I invest all my savings in this stock?',
+  'dia mengalami kekerasan dalam rumah tangga',
 ];
 
 const negativeCases = [

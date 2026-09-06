@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { drawReading, DrawError } from '@/lib/tarot/draw-service';
 import { getAccountSessionSafety } from '@/lib/ai/session-safety';
 import { getAuthUser, isSupabaseServerConfigured } from '@/lib/supabase/server';
+import { clientKey, rateLimit, tooManyRequests } from '@/lib/rate-limit';
+import { createClient } from '@/lib/supabase/server';
 // Server-side draw (plan: Card draws happen server-side only, seeded).
 // Guests: nothing persisted server-side; authed: reading row inserted.
 
@@ -11,6 +13,9 @@ const bodySchema = z.object({
 });
 
 export async function POST(request: Request) {
+  // Audit A07: draw endpoints are unthrottled model-independent writes; cap them anyway.
+  const limit = rateLimit(clientKey(request, 'tarot-draw'), 12, 60_000);
+  if (!limit.ok) return tooManyRequests(limit);
   let raw: unknown;
   try {
     raw = await request.json();
@@ -24,6 +29,15 @@ export async function POST(request: Request) {
   const sessionId = parsed.data.sessionId;
   if (user) {
     if (!sessionId) return Response.json({ error: 'session_required' }, { status: 400 });
+    // Audit A17: a reading may only attach to a session the caller owns.
+    const supabase = await createClient();
+    const { data: session } = await supabase
+      .from('reflection_sessions')
+      .select('id')
+      .eq('id', sessionId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+    if (!session) return Response.json({ error: 'forbidden' }, { status: 403 });
     try {
       if ((await getAccountSessionSafety(sessionId, user.id)).highStakes) {
         return Response.json({ error: 'tarot_unavailable' }, { status: 403 });

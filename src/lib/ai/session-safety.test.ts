@@ -22,14 +22,14 @@ beforeEach(() => {
 });
 
 describe('getAccountSessionSafety', () => {
-  it('classifies human user messages and skips machine notices', async () => {
+  it('classifies every user message — stored meta never gates the classifier (audit A27)', async () => {
     const query = configureQuery([
       { role: 'user', content: 'I am facing foreclosure.', meta: {} },
       { role: 'user', content: 'I am suicidal.', meta: { systemNotice: 'draw', readingId: 'reading-1' } },
       { role: 'assistant', content: 'I am suicidal.', meta: {} },
     ]);
 
-    await expect(getAccountSessionSafety('session-1', 'user-1')).resolves.toEqual({ highStakes: true, crisis: false });
+    await expect(getAccountSessionSafety('session-1', 'user-1')).resolves.toEqual({ highStakes: true, crisis: true });
     expect(mocks.from).toHaveBeenCalledWith('messages');
     expect(query.select).toHaveBeenCalledWith('role, content, meta');
     expect(query.eqSession).toHaveBeenCalledWith('session_id', 'session-1');

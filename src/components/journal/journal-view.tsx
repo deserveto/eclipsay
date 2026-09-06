@@ -17,21 +17,51 @@ const TYPE_LABEL: Record<string, string> = {
   intention: 'INTENTION',
 };
 
+// Audit A22: group by the FULL local calendar date (year included). The old
+// month/day label merged "September 6" from different years into one group.
+function dayKey(iso: string): string {
+  const date = new Date(iso);
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 function dayLabel(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: 'long', day: 'numeric' });
+  const date = new Date(iso);
+  const sameYear = date.getFullYear() === new Date().getFullYear();
+  return date.toLocaleDateString(undefined, {
+    month: 'long',
+    day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' }),
+  });
 }
 
 // Journal timeline (PRD §36): chronological, grouped by day, type badges.
 export function JournalView() {
   const [entries, setEntries] = useState<JournalEntry[] | null>(null);
+  // Audit A13: read failures render an explicit error + retry, never an
+  // empty timeline and never a silent guest-data fallback.
+  const [loadError, setLoadError] = useState(false);
+  const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
-    listEntries().then(setEntries);
-  }, []);
+    let active = true;
+    setEntries(null);
+    setLoadError(false);
+    listEntries().then((result) => {
+      if (!active) return;
+      if (result.status === 'error') setLoadError(true);
+      else setEntries(result.entries);
+    });
+    return () => {
+      active = false;
+    };
+  }, [nonce]);
 
   const groups = new Map<string, JournalEntry[]>();
   for (const entry of entries ?? []) {
-    const day = dayLabel(entry.created_at);
+    const day = dayKey(entry.created_at);
     const list = groups.get(day) ?? [];
     list.push(entry);
     groups.set(day, list);
@@ -49,16 +79,26 @@ export function JournalView() {
         </Button>
       </header>
 
-      {entries === null && <p className="text-sm text-muted-foreground">Loading…</p>}
-      {entries !== null && entries.length === 0 && (
+      {entries === null && !loadError && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {loadError && (
+        <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3">
+          <p className="text-sm">Your journal couldn&apos;t be loaded just now. Nothing is lost — try again.</p>
+          <div className="mt-2">
+            <Button size="sm" variant="secondary" onClick={() => setNonce((n) => n + 1)}>
+              Try again
+            </Button>
+          </div>
+        </div>
+      )}
+      {entries !== null && !loadError && entries.length === 0 && (
         <p className="text-sm text-muted-foreground">
           Nothing here yet. Saved insights, reflections, and freeform entries all live here.
         </p>
       )}
 
       {[...groups.entries()].map(([day, list]) => (
-        <section key={day} aria-label={day} className="space-y-3">
-          <h2 className="text-sm font-medium text-muted-foreground">{day}</h2>
+        <section key={day} aria-label={list[0] ? dayLabel(list[0].created_at) : day} className="space-y-3">
+          <h2 className="text-sm font-medium text-muted-foreground">{list[0] ? dayLabel(list[0].created_at) : day}</h2>
           {list.map((entry) => (
             <Link
               key={entry.id}

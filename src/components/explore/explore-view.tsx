@@ -34,8 +34,10 @@ export function SpreadCard({ spread }: { spread: (typeof SPREADS)[number] }) {
           ))}
         </ol>
         <Link
-          href="/reflect?tarot=1"
-          className="mt-3 inline-flex text-sm font-medium text-primary underline-offset-4 hover:underline"
+          // Audit A21: the chosen spread travels with the link so the chat
+          // composer's starter names it instead of a generic ask.
+          href={`/reflect?intent=tarot&spread=${spread.id}`}
+          className="mt-3 inline-flex text-sm font-medium text-primary underline underline-offset-4 hover:opacity-80"
         >
           Explore with cards
         </Link>
@@ -113,8 +115,13 @@ export function ExploreView() {
                 key={f.value}
                 onClick={() => setFilter(f.value)}
                 aria-pressed={filter === f.value}
-                className={`rounded-full border px-3 py-1 text-xs transition-colors ${
-                  filter === f.value ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-accent'
+                className={`rounded-full border px-3 py-1 text-xs transition-colors motion-reduce:transition-none ${
+                  // Audit A24: the old primary-on-primary-tint combo measured
+                  // 4.38:1 in light mode (below AA for this 12px text); the
+                  // solid chip measures ≥4.8:1 in both themes.
+                  filter === f.value
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-border text-muted-foreground hover:bg-accent'
                 }`}
               >
                 {f.label}

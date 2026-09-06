@@ -18,6 +18,14 @@ const eslintConfig = [
       "out/**",
       "build/**",
       "next-env.d.ts",
+      // Local agent/tooling trees — not product code; their warnings drown
+      ".gemini/**",
+      ".agent/**",
+      ".agents/**",
+      ".codex/**",
+      ".impeccable/**",
+      ".opencode/**",
+      ".playwright-mcp/**",
     ],
   },
 ];

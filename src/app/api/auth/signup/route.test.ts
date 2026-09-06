@@ -101,20 +101,20 @@ describe('POST /api/auth/signup', () => {
     expect(await res.json()).toEqual({ error: 'signup_failed' });
   });
 
-  it('maps a duplicate account to email_taken', async () => {
+  it('responds to a duplicate account with the SAME generic verification shape (anti-enumeration)', async () => {
     signUp.mockResolvedValue({
       data: { session: null, user: null },
       error: { status: 422, code: 'user_already_exists', message: 'User already registered' },
     });
     const res = await postJson(validBody);
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: 'email_taken' });
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({ status: 'verification_required', email: validBody.email });
   });
 
-  it('detects a duplicate account from the legacy message shape', async () => {
+  it('keeps the generic verification response for the legacy duplicate message shape too', async () => {
     signUp.mockResolvedValue({ data: { session: null, user: null }, error: { message: 'User already been registered' } });
     const res = await postJson(validBody);
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: 'email_taken' });
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({ status: 'verification_required', email: validBody.email });
   });
 });

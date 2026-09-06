@@ -29,32 +29,42 @@ function fmtDate(iso: string): string {
 
 // Memory management (PRD §41, §42): explicit, editable, forgettable.
 export function MemoryView() {
-  const { mode } = useDataMode();
+  const { mode, resolving } = useDataMode();
   const [memories, setMemories] = useState<Memory[] | null>(null);
   const [memoryEnabled, setMemoryEnabled] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [newContent, setNewContent] = useState('');
   const [newCategory, setNewCategory] = useState('context');
+  // Audit A13: a failed account read is an explicit error state — never an
+  // empty memory list pretending nothing was ever saved.
+  const [loadError, setLoadError] = useState(false);
+  const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
+    if (resolving) return;
     if (mode === 'account' && isSupabaseConfigured()) {
       const supabase = createClient();
       void (async () => {
-        const { data: memoriesData } = await supabase
-          .from('memories')
-          .select('*')
-          .order('created_at', { ascending: false });
+        const [{ data: memoriesData, error: memoriesError }, { data: profileData }] = await Promise.all([
+          supabase.from('memories').select('*').order('created_at', { ascending: false }),
+          supabase.from('profiles').select('memory_enabled').limit(1),
+        ]);
+        if (memoriesError) {
+          setLoadError(true);
+          return;
+        }
+        setLoadError(false);
         setMemories((memoriesData ?? []) as unknown as Memory[]);
-        const { data: profileData } = await supabase.from('profiles').select('memory_enabled').limit(1);
         setMemoryEnabled(profileData?.[0]?.memory_enabled ?? true);
       })();
       return;
     }
     const guestStore = loadGuestStore();
+    setLoadError(false);
     setMemories(guestStore.memories);
     setMemoryEnabled(guestStore.profile.memoryEnabled);
-  }, [mode]);
+  }, [mode, resolving, nonce]);
 
   const reload = () => {
     if (mode === 'account' && isSupabaseConfigured()) {
@@ -233,8 +243,18 @@ export function MemoryView() {
         </Button>
       </div>
 
-      {memories === null && <p className="text-sm text-muted-foreground">Loading…</p>}
-      {memories !== null && memories.length === 0 && (
+      {memories === null && !loadError && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {loadError && (
+        <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3">
+          <p className="text-sm">Your memories couldn&apos;t be loaded just now. Nothing is lost — try again.</p>
+          <div className="mt-2">
+            <Button size="sm" variant="secondary" onClick={() => setNonce((n) => n + 1)}>
+              Try again
+            </Button>
+          </div>
+        </div>
+      )}
+      {memories !== null && !loadError && memories.length === 0 && (
         <p className="text-sm text-muted-foreground">
           Nothing remembered yet. When something worth keeping comes up in a reflection, Eclipsay will ask before
           remembering it.

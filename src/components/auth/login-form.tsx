@@ -88,7 +88,7 @@ export function LoginForm({ next, initialError }: { next: string; initialError: 
           {initialError === 'verification_failed' && (
             <>
               {' '}
-              <Link href="/verify-email" className="text-primary underline-offset-4 hover:underline">
+              <Link href="/verify-email" className="text-primary underline underline-offset-4 hover:opacity-80">
                 Request a new verification email
               </Link>
               .
@@ -155,7 +155,7 @@ export function LoginForm({ next, initialError }: { next: string; initialError: 
 
       <p className="text-sm text-muted-foreground">
         New here?{' '}
-        <Link href={`/signup?next=${encodeURIComponent(safeNextPath(next))}`} className="text-primary underline-offset-4 hover:underline">
+        <Link href={`/signup?next=${encodeURIComponent(safeNextPath(next))}`} className="text-primary underline underline-offset-4 hover:opacity-80">
           Create an account
         </Link>
       </p>

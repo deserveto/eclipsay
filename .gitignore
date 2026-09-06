@@ -49,3 +49,7 @@ next-env.d.ts
 /.impeccable/
 /.opencode/
 /.worktrees/
+
+# Playwright MCP session noise (evidence files stay tracked)
+.playwright-mcp/page-*.yml
+.playwright-mcp/console-*.log

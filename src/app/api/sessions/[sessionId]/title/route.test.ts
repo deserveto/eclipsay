@@ -3,7 +3,7 @@ import { POST } from './route';
 
 const mocks = vi.hoisted(() => ({
   generateText: vi.fn(async () => ({ text: 'A quiet decision' })),
-  getModel: vi.fn(() => 'model'),
+  getModel: vi.fn(async () => ({ model: 'model', providerOptions: {} })),
   isAiConfigured: vi.fn(() => true),
   getAuthUser: vi.fn(async (): Promise<{ id: string } | null> => null),
   isSupabaseServerConfigured: vi.fn(() => false),

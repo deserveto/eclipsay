@@ -105,7 +105,7 @@ export function ForgotPasswordForm() {
 
       <p className="text-sm text-muted-foreground">
         Remembered it?{' '}
-        <Link href="/login" className="text-primary underline-offset-4 hover:underline">
+        <Link href="/login" className="text-primary underline underline-offset-4 hover:opacity-80">
           Back to login
         </Link>
       </p>

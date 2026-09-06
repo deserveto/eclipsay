@@ -3,7 +3,10 @@ import { POST } from './route';
 
 const mocks = vi.hoisted(() => ({
   isAiConfigured: vi.fn(() => true),
-  getModel: vi.fn(() => 'model'),
+  getModel: vi.fn(async () => ({
+    model: 'model',
+    providerOptions: { openrouter: { reasoning: { exclude: true } } },
+  })),
   buildSystemPrompt: vi.fn(() => 'system'),
   isSupabaseServerConfigured: vi.fn(() => false),
   getAuthUser: vi.fn(async (): Promise<{ id: string } | null> => null),
@@ -91,7 +94,9 @@ describe('POST /api/chat safety boundary', () => {
     expect(mocks.createTarotTools).not.toHaveBeenCalled();
     expect(mocks.buildSystemPrompt).toHaveBeenCalledWith(
       expect.objectContaining({
-        safety: { highStakes: false, crisis: false },
+        // Audit A29: the STICKY session policy reaches the prompt, so the
+        // crisis instructions survive later neutral messages.
+        safety: { highStakes: true, crisis: true },
         tarotUnavailable: true,
       }),
     );

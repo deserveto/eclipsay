@@ -11,7 +11,8 @@ describe('Explore card entry points', () => {
     const html = renderToStaticMarkup(createElement(SpreadCard, { spread: SPREADS[0] }));
 
     expect(html).toContain('Explore with cards');
-    expect(html).toContain('href="/reflect?tarot=1"');
+    // Audit A21: the selected spread travels with the link.
+    expect(html).toContain(`href="/reflect?intent=tarot&amp;spread=${SPREADS[0].id}"`);
   });
 
   it('renders an accessible tarot CTA on card detail pages', async () => {
