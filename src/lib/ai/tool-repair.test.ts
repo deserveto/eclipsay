@@ -30,7 +30,9 @@ describe('ask_user repair through the SDK validation boundary', () => {
         stream: new ReadableStream({
           start(controller) {
             controller.enqueue({ type: 'stream-start', warnings: [] });
-            controller.enqueue(invalidReply.content[0]);
+            const toolCall = invalidReply.content[0];
+            if (toolCall.type !== 'tool-call') throw new Error('expected tool-call content');
+            controller.enqueue(toolCall);
             controller.enqueue({ type: 'finish', usage: invalidReply.usage, finishReason: invalidReply.finishReason });
             controller.close();
           },
